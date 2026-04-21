@@ -1,0 +1,46 @@
+# 生产环境配置
+environment: prod
+
+# 日志配置
+logging:
+  level: INFO
+  format: json
+  file_path: logs/sdwan_desktop.log
+  rotation: 10MB
+  retention: 7
+
+# 网络探测配置
+probe:
+  timeout_seconds: 60
+  retry_count: 3
+  max_concurrent: 10
+
+# SSH配置
+ssh:
+  connect_timeout: 15
+  command_timeout: 45
+  keepalive_interval: 30
+
+# 报告配置
+reporting:
+  output_dir: reports
+  template_dir: templates
+  auto_open: false
+
+# 安全配置
+security:
+  credential_storage: secure
+  max_attempts: 3
+  lockout_duration: 300
+
+# 性能配置
+performance:
+  max_workers: 20
+  queue_size: 100
+  memory_limit_mb: 1024
+
+# 调试配置
+debug:
+  enable_trace: true
+  save_snapshots: false
+  verbose_logging: false

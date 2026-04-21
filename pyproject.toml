@@ -1,0 +1,70 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sdwan-desktop"
+version = "0.1.0-alpha"
+description = "SD-WAN桌面诊断专家"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+    {name = "SD-WAN Team"}
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+
+dependencies = [
+    "pydantic>=2.0.0",
+    "pyside6>=6.5.0",
+    "paramiko>=3.0.0",
+    "asyncssh>=2.13.0",
+    "dnspython>=2.4.0",
+    "pythonping>=1.1.0",
+    "playwright>=1.40.0",
+    "jinja2>=3.1.0",
+    "pyyaml>=6.0",
+    "wmi>=1.5.0",
+    "pywin32>=306",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.1.0",
+    "ruff>=0.1.0",
+    "mypy>=1.7.0",
+    "pre-commit>=3.5.0",
+]
+
+[project.scripts]
+agentctl = "sdwan_desktop.interface.cli.main:main"
+sdwan-gui = "sdwan_desktop.interface.gui.main_window:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sdwan_desktop"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+select = ["E", "F", "I", "N", "W", "UP", "B", "C4"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-v --cov=src/sdwan_desktop --cov-report=html"

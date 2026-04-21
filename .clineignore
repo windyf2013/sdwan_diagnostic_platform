@@ -1,0 +1,163 @@
+# ==========================================
+# Cline 忽略文件配置
+# 目的：防止 AI 读取无关的依赖、构建产物和二进制文件，节省 Token 成本
+# ==========================================
+#使用注意事项
+#关于 *.svg 和 *.lock 文件：
+#1. 如果项目是前端组件库，需要 AI 帮你画图标，请删除 *.svg 那一行。
+#2. 如果项目需要 AI 帮你分析依赖冲突，可以临时删除锁文件的忽略规则。
+
+# ------------------------------------------
+# 1. 包管理器与依赖目录 (体积巨大，纯第三方代码)
+# ------------------------------------------
+node_modules/
+vendor/
+.pnpm-store/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+pip-log.txt
+pip-delete-this-directory.txt
+venv/
+env/
+.venv/
+.env/
+
+# ------------------------------------------
+# 2. 构建与输出目录 (AI 不需要理解编译后的代码)
+# ------------------------------------------
+dist/
+build/
+out/
+target/
+bin/
+obj/
+*.exe
+*.dll
+*.so
+*.dylib
+*.class
+*.jar
+*.war
+*.ear
+
+# ------------------------------------------
+# 3. 缓存与临时文件 (IDE 和工具生成的临时数据)
+# ------------------------------------------
+.cache/
+.tmp/
+*.tmp
+*.swp
+*.log
+*.bak
+*.lockb
+*.tsbuildinfo
+.eslintcache
+.stylelintcache
+.parcel-cache/
+.next/
+.nuxt/
+.output/
+.svelte-kit/
+
+# ------------------------------------------
+# 4. 图片、字体与大型二进制资源 (AI 无法识别像素内容)
+# ------------------------------------------
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.bmp
+*.ico
+*.webp
+*.svg          # 如果你需要 AI 修改 SVG 代码，可以注释掉这行
+*.ttf
+*.woff
+*.woff2
+*.eot
+*.mp4
+*.webm
+*.mp3
+*.wav
+*.pdf
+*.zip
+*.tar.gz
+*.7z
+
+# ------------------------------------------
+# 5. 环境配置与机密文件 (防止密钥泄露给云端模型)
+# ------------------------------------------
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+*.crt
+secrets/
+secret/
+*.secret
+.DS_Store
+Thumbs.db
+
+# ------------------------------------------
+# 6. IDE 特定目录 (VSCode 配置除外)
+# ------------------------------------------
+.idea/
+*.iml
+.vscode/           # 注释掉这行如果你希望 Cline 读取你的调试配置 (launch.json)
+!.vscode/settings.json
+!.vscode/extensions.json
+
+# ------------------------------------------
+# 7. 测试覆盖率与报告
+# ------------------------------------------
+coverage/
+.nyc_output/
+*.lcov
+test-results/
+reports/
+
+# ------------------------------------------
+# 8. 数据库文件
+# ------------------------------------------
+*.sqlite
+*.sqlite3
+*.db
+*.mdb
+*.accdb
+dump.rdb
+
+# ------------------------------------------
+# 9. 锁文件 (通常不需要 AI 理解依赖版本细节)
+# ------------------------------------------
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+composer.lock
+Gemfile.lock
+poetry.lock
+Cargo.lock
+
+# ------------------------------------------
+# 10. 特定框架的生成文件 (AI 只看源码)
+# ------------------------------------------
+# Next.js / Remix
+.next/
+.cache/
+
+# Django
+staticfiles/
+media/
+
+# Flutter
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+
+# Unity (如果你在用 AI 写 Unity 脚本)
+Library/
+Temp/
+Obj/
+Logs/

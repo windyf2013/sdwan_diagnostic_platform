@@ -1,0 +1,32 @@
+# 开发环境配置
+environment: dev
+
+# 日志配置
+logging:
+  level: DEBUG
+  format: json
+  file_path: logs/sdwan_desktop_dev.log
+
+# 网络探测配置
+probe:
+  timeout_seconds: 30
+  retry_count: 2
+  max_concurrent: 5
+
+# SSH配置
+ssh:
+  connect_timeout: 10
+  command_timeout: 30
+  keepalive_interval: 60
+
+# 报告配置
+reporting:
+  output_dir: reports/dev
+  template_dir: templates
+  auto_open: false
+
+# 调试配置
+debug:
+  enable_trace: true
+  save_snapshots: true
+  verbose_logging: true

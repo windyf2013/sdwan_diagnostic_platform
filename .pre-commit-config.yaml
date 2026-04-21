@@ -1,0 +1,48 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-json
+      - id: check-toml
+      - id: check-added-large-files
+        args: ['--maxkb=1024']
+      - id: detect-private-key
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.1.11
+    hooks:
+      - id: ruff
+        args: [--fix, --exit-non-zero-on-fix]
+      - id: ruff-format
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.7.1
+    hooks:
+      - id: mypy
+        additional_dependencies: [pydantic]
+        args: [--strict, --ignore-missing-imports]
+
+  - repo: local
+    hooks:
+      - id: check-spec-compliance
+        name: Check SDWAN Spec Compliance
+        entry: python -c "
+import sys
+import os
+sys.path.insert(0, 'src')
+try:
+    from sdwan_desktop.runtime_validator.base import validate_project_structure
+    if validate_project_structure():
+        sys.exit(0)
+    else:
+        sys.exit(1)
+except ImportError:
+    print('Runtime validator not installed, skipping spec compliance check')
+    sys.exit(0)
+"
+        language: system
+        pass_filenames: false
+        always_run: true
