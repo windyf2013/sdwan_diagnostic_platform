@@ -9,7 +9,7 @@ import time
 
 from ....core.types.context import Context
 from ....tools.registry.decorator import tool_function
-from ....tools.registry.dispatcher import ToolRequest
+from ....tools.registry.dispatcher import ToolRequest, ToolResponse
 
 
 @dataclass
@@ -58,24 +58,50 @@ class SshAdapter:
         self._connections: Dict[str, paramiko.SSHClient] = {}
         self._connection_info: Dict[str, SshConnection] = {}
     
-    async def execute(self, request: ToolRequest, ctx: Context) -> Dict[str, Any]:
+    async def execute(self, request: ToolRequest, ctx: Context) -> ToolResponse:
         """执行SSH操作"""
-        action = request.params.get("action", "connect")
+        action = request.parameters.get("action", "connect")
         
         if action == "connect":
-            return await self._connect(request.params)
+            result = await self._connect(request.parameters)
         elif action == "execute":
-            return await self._execute_command(request.params)
+            result = await self._execute_command(request.parameters)
         elif action == "disconnect":
-            return await self._disconnect(request.params)
+            result = await self._disconnect(request.parameters)
         elif action == "collect_config":
-            return await self._collect_configuration(request.params)
+            result = await self._collect_configuration(request.parameters)
         else:
-            return {
+            result = {
                 "status": "error",
                 "data": None,
                 "error": f"未知操作: {action}"
             }
+        
+        # 转换为ToolResponse
+        success = result.get("status") == "success"
+        data = result.get("data")
+        error_message = result.get("error")
+        
+        # 根据错误类型设置错误码
+        error_code = None
+        if not success:
+            if "必须提供主机地址和用户名" in error_message:
+                error_code = "VAL_002"
+            elif "认证失败" in error_message:
+                error_code = "AUTH_001"
+            elif "连接超时" in error_message:
+                error_code = "NET_001"
+            elif "连接不存在" in error_message:
+                error_code = "CONN_001"
+            else:
+                error_code = "TOOL_001"
+        
+        return ToolResponse(
+            success=success,
+            data=data,
+            error_message=error_message,
+            error_code=error_code
+        )
     
     async def _connect(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """建立SSH连接"""
@@ -128,9 +154,9 @@ class SshAdapter:
                 pkey = paramiko.RSAKey.from_private_key(key_file)
                 connect_params["pkey"] = pkey
             
-            # 建立连接
-            await asyncio.get_event_loop().run_in_executor(
-                None, client.connect, **connect_params
+            # 建立连接 - 使用lambda包装参数
+            await asyncio.to_thread(
+                lambda: client.connect(**connect_params)
             )
             
             # 保存连接

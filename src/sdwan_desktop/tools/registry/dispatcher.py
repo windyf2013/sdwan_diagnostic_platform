@@ -1,12 +1,12 @@
 """工具调度器 - 唯一工具调用入口"""
 
 import asyncio
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Type
 from dataclasses import dataclass, field
 import uuid
 
-from ..core.errors.tool import ToolError, ToolTimeoutError
-from ..core.types.context import Context
+from sdwan_desktop.core.errors.tool import ToolError, ToolTimeoutError
+from sdwan_desktop.core.types.context import Context
 from .base import ToolRegistry, ToolMetadata
 
 

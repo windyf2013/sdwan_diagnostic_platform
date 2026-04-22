@@ -280,11 +280,30 @@ class TraceRouteTool:
         if is_windows:
             # Windows tracert输出解析
             # 示例: "  1     1 ms     1 ms     1 ms  192.168.1.1"
-            pattern = r"^\s*(\d+)\s+([\d*]+)\s+ms\s+([\d*]+)\s+ms\s+([\d*]+)\s+ms\s+([^\s]+)"
+            # 超时: "  3     *        *        *     Request timed out."
+            pattern = r"^\s*(\d+)\s+([\d*<]+)\s+ms\s+([\d*<]+)\s+ms\s+([\d*<]+)\s+ms\s+(.+)"
+            timeout_pattern = r"^\s*(\d+)\s+\*\s+\*\s+\*\s+Request timed out"
             
             for line in output.split('\n'):
                 line = line.strip()
                 if not line:
+                    continue
+                
+                # 先检查是否为超时行（所有RTT都是*）
+                timeout_match = re.match(timeout_pattern, line)
+                if timeout_match:
+                    hop_num = int(timeout_match.group(1))
+                    hop = {
+                        "hop": hop_num,
+                        "ip": "*",
+                        "hostname": None,
+                        "rtts": [],
+                        "rtt_min": None,
+                        "rtt_avg": None,
+                        "rtt_max": None,
+                        "loss_rate": 1.0,
+                    }
+                    hops.append(hop)
                     continue
                 
                 match = re.match(pattern, line)

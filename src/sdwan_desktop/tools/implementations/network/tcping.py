@@ -168,7 +168,7 @@ class TcpPortTool:
             logger.info(
                 f"TCP端口探测完成: {host}:{port}, "
                 f"开放={stats['port_open']}, "
-                f"平均响应时间={stats['response_time_avg']:.1f}ms, "
+                f"平均响应时间={stats['response_time_avg'] if stats['response_time_avg'] is not None else 'N/A'}ms, "
                 f"丢包率={stats['loss_rate']:.1%}",
                 extra={"trace_id": ctx.trace_id}
             )
@@ -471,7 +471,8 @@ class TcpPortTool:
             response_time_stddev = None
         
         # 计算丢包率
-        loss_rate = (total_probes - successful_probes) / total_probes
+        loss_rate = (total_probes - successful_probes) / total_probes if total_probes > 0 else 1.0
+
         
         # 判断端口是否开放（至少成功一次）
         port_open = successful_probes > 0

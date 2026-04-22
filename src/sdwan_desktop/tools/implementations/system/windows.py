@@ -488,7 +488,7 @@ class WindowsSystemTool:
                     enabled=proxy_enable,
                     server=proxy_server,
                     bypass_list=proxy_override.split(";") if proxy_override else [],
-                    auto_detect=False,  # 需要从其他注册表项读取
+                    auto_detect_enabled=False,  # 需要从其他注册表项读取
                     auto_config_url=""
                 )
                 
@@ -543,8 +543,8 @@ class WindowsSystemTool:
                 enabled=enabled,
                 profiles=profiles,
                 icmp_blocked=False,  # 需要从其他规则判断
-                inbound_default_action="block" if enabled else "allow",
-                outbound_default_action="allow"
+                inbound_blocked=enabled,
+                outbound_blocked=False
             )
             
         except Exception as e:
@@ -588,17 +588,11 @@ class WindowsSystemTool:
                         mac_address = parts[1]
                         entry_type = parts[2].lower()
                         
-                        # 判断类型
-                        is_dynamic = entry_type == "dynamic"
-                        is_static = entry_type == "static"
-                        
                         arp_entry = ArpEntry(
                             ip_address=ip_address,
                             mac_address=mac_address,
                             interface="",  # 需要从上下文获取
-                            is_dynamic=is_dynamic,
-                            is_static=is_static,
-                            age_seconds=None  # Windows arp不显示年龄
+                            type=entry_type
                         )
                         arp_entries.append(arp_entry)
                     except (ValueError, IndexError):
@@ -658,21 +652,13 @@ class WindowsSystemTool:
                         foreign_ip = foreign_parts[0] if len(foreign_parts) > 0 else ""
                         foreign_port = int(foreign_parts[1]) if len(foreign_parts) > 1 else 0
                         
-                        # 判断连接状态
-                        is_listening = state == "listening"
-                        is_established = state == "established"
-                        is_time_wait = state == "time_wait"
-                        is_close_wait = state == "close_wait"
-                        
                         connection = ConnectionInfo(
                             protocol=protocol,
-                            local_ip=local_ip,
+                            local_address=local_ip,
                             local_port=local_port,
-                            foreign_ip=foreign_ip,
-                            foreign_port=foreign_port,
-                            state=state,
-                            is_listening=is_listening,
-                            is_established=is_established,
+                            remote_address=foreign_ip,
+                            remote_port=foreign_port,
+                            state=state.upper(),
                             pid=None,  # netstat -an不显示PID
                             process_name=None
                         )
@@ -723,7 +709,7 @@ class WindowsSystemTool:
                 addresses=ipv6_addresses,
                 is_preferred=False,  # 需要从路由表判断
                 dns_servers=[],
-                gateway=None
+                default_gateway=None
             )
             
         except Exception as e:

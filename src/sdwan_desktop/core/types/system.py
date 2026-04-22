@@ -32,9 +32,9 @@ class AdapterType(str, Enum):
 @dataclass(slots=True)
 class AdapterInfo(BaseContract):
     """网卡信息"""
-    name: str
-    description: str
-    mac_address: str
+    name: str = ""
+    description: str = ""
+    mac_address: str = ""
     adapter_type: AdapterType = AdapterType.ETHERNET
     status: AdapterStatus = AdapterStatus.UNKNOWN
     is_connected: bool = False
@@ -54,12 +54,12 @@ class AdapterInfo(BaseContract):
 @dataclass(slots=True)
 class IpConfigInfo(BaseContract):
     """IP配置信息"""
-    ip_address: str
-    subnet_mask: str
-    default_gateway: Optional[str]
-    dhcp_enabled: bool
-    dns_servers: List[str]
-    dns_suffix: Optional[str]
+    ip_address: str = ""
+    subnet_mask: str = ""
+    default_gateway: Optional[str] = None
+    dhcp_enabled: bool = False
+    dns_servers: List[str] = field(default_factory=list)
+    dns_suffix: Optional[str] = None
     dhcp_server: Optional[str] = None
     dhcp_lease_obtained: Optional[str] = None
     dhcp_lease_expires: Optional[str] = None
@@ -76,12 +76,12 @@ class IpConfigInfo(BaseContract):
 @dataclass(slots=True)
 class RouteInfo(BaseContract):
     """路由表条目"""
-    destination: str
-    netmask: str
-    gateway: str
-    interface: str
-    metric: int
-    protocol: str  # static, dynamic, local, etc.
+    destination: str = ""
+    netmask: str = ""
+    gateway: str = ""
+    interface: str = ""
+    metric: int = 0
+    protocol: str = "static"  # static, dynamic, local, etc.
     persistent: bool = False
     
     @property
@@ -93,7 +93,7 @@ class RouteInfo(BaseContract):
 @dataclass(slots=True)
 class DnsConfigInfo(BaseContract):
     """DNS配置信息"""
-    servers: List[str]
+    servers: List[str] = field(default_factory=list)
     suffix_search_order: List[str] = field(default_factory=list)
     primary_dns_suffix: Optional[str] = None
     connection_specific_suffix: Optional[str] = None
@@ -125,21 +125,21 @@ class FirewallInfo(BaseContract):
 @dataclass(slots=True)
 class ArpEntry(BaseContract):
     """ARP表条目"""
-    ip_address: str
-    mac_address: str
-    interface: str
-    type: str  # dynamic, static, invalid
+    ip_address: str = ""
+    mac_address: str = ""
+    interface: str = ""
+    type: str = "dynamic"  # dynamic, static, invalid
 
 
 @dataclass(slots=True)
 class ConnectionInfo(BaseContract):
     """活动连接信息"""
-    protocol: str  # tcp, udp
-    local_address: str
-    local_port: int
-    remote_address: str
-    remote_port: int
-    state: str  # LISTEN, ESTABLISHED, TIME_WAIT, etc.
+    protocol: str = "tcp"  # tcp, udp
+    local_address: str = ""
+    local_port: int = 0
+    remote_address: str = ""
+    remote_port: int = 0
+    state: str = "UNKNOWN"  # LISTEN, ESTABLISHED, TIME_WAIT, etc.
     pid: Optional[int] = None
     process_name: Optional[str] = None
 

@@ -240,6 +240,12 @@ class PingTool:
                     rtt = float(match.group(1))
                     ttl = int(match.group(2))
                     results.append({"success": True, "rtt": rtt, "ttl": ttl})
+            
+            # 统计超时数据包
+            timeout_pattern = r"Request timed out\."
+            timeout_count = len(re.findall(timeout_pattern, output))
+            for _ in range(timeout_count):
+                results.append({"success": False, "rtt": None, "ttl": None})
         else:
             # Linux ping输出解析
             # 示例: "64 bytes from 8.8.8.8: icmp_seq=1 ttl=116 time=10.1 ms"
@@ -248,6 +254,12 @@ class PingTool:
                 ttl = int(match.group(2))
                 rtt = float(match.group(3))
                 results.append({"success": True, "rtt": rtt, "ttl": ttl})
+            
+            # 统计超时数据包（Linux格式）
+            timeout_pattern = r"no answer yet"
+            timeout_count = len(re.findall(timeout_pattern, output))
+            for _ in range(timeout_count):
+                results.append({"success": False, "rtt": None, "ttl": None})
         
         return results
     
