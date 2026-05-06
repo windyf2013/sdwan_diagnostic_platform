@@ -73,7 +73,7 @@ class PingTool:
                 - host: str (必填) 目标主机
                 - count: int (可选) 发包数量，默认4
                 - timeout: int (可选) 超时秒数，默认5
-                - packet_size: int (可选) 包大小，默认56
+                - packet_size: int (可选) 包大小
             ctx: 流程上下文
             
         Returns:
@@ -194,7 +194,12 @@ class PingTool:
                 raise RuntimeError(f"ping命令失败: {stderr.decode('utf-8', errors='ignore')}")
             
             # 解析输出
-            output = stdout.decode('utf-8', errors='ignore')
+            # Windows 中文系统通常使用 gbk 编码，直接 utf-8 解码会导致乱码从而解析失败
+            if self._is_windows:
+                output = stdout.decode('gbk', errors='ignore')
+            else:
+                output = stdout.decode('utf-8', errors='ignore')
+            
             return self._parse_ping_output(output, self._is_windows)
             
         except asyncio.TimeoutError:
@@ -204,7 +209,11 @@ class PingTool:
                 await asyncio.sleep(0.5)
                 if process.returncode is None:
                     process.kill()
-            except:
+                try:
+                    await process.wait()
+                except Exception:
+                    pass
+            except Exception:
                 pass
             raise
     
@@ -227,16 +236,19 @@ class PingTool:
         if is_windows:
             # Windows ping输出解析
             # 示例: "来自 8.8.8.8 的回复: 字节=56 时间=10ms TTL=116"
-            pattern = r"来自 .+? 的回复: 字节=\d+ 时间=(\d+)ms TTL=(\d+)"
-            for match in re.finditer(pattern, output):
+            # 兼容 <1ms 的情况，如 "时间<1ms"
+            pattern = r"来自 .+? 的回复: 字节=\d+ 时间[=<](\d+)ms TTL=(\d+)"
+            matches = list(re.finditer(pattern, output))
+            for match in matches:
                 rtt = float(match.group(1))
                 ttl = int(match.group(2))
                 results.append({"success": True, "rtt": rtt, "ttl": ttl})
             
             # 英文系统格式
             if not results:
-                pattern = r"Reply from .+?: bytes=\d+ time=(\d+)ms TTL=(\d+)"
-                for match in re.finditer(pattern, output):
+                pattern = r"Reply from .+?: bytes=\d+ time[=<](\d+)ms TTL=(\d+)"
+                matches = list(re.finditer(pattern, output))
+                for match in matches:
                     rtt = float(match.group(1))
                     ttl = int(match.group(2))
                     results.append({"success": True, "rtt": rtt, "ttl": ttl})

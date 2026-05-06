@@ -48,6 +48,9 @@ dev = [
 [project.scripts]
 agentctl = "sdwan_desktop.interface.cli.main:main"
 sdwan-gui = "sdwan_desktop.interface.gui.main_window:main"
+sdwan-waterfall = "sdwan_desktop.interface.cli.commands.waterfall:waterfall"
+sdwan-deep-dive = "sdwan_desktop.interface.cli.commands.deep_dive:deep_dive"
+sdwan-quick-check = "sdwan_desktop.interface.cli.commands.quick_check:quick_check"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/sdwan_desktop"]
@@ -67,4 +70,7 @@ warn_unused_configs = true
 asyncio_mode = "auto"
 testpaths = ["tests"]
 python_files = ["test_*.py"]
-addopts = "-v --cov=src/sdwan_desktop --cov-report=html"
+addopts = "-v --cov=src/sdwan_desktop --cov-report=html -W ignore::pytest.PytestUnknownMarkWarning -W ignore::RuntimeWarning"
+markers = [
+    "benchmark: marks tests as benchmark tests",
+]

@@ -1,0 +1,782 @@
+{% extends "base.html" %}
+
+{% block content %}
+<!-- 报告头部 -->
+<div class="header">
+    <h1>🔍 SD-WAN 一键体检报告</h1>
+    <div class="meta-info">
+        <div class="meta-item">
+            <div class="meta-label">报告 ID</div>
+            <div class="meta-value">{{ report_id }}</div>
+        </div>
+        <div class="meta-item">
+            <div class="meta-label">Trace ID</div>
+            <div class="meta-value">{{ trace_id }}</div>
+        </div>
+        <div class="meta-item">
+            <div class="meta-label">生成时间</div>
+            <div class="meta-value">{{ generated_at }}</div>
+        </div>
+        <div class="meta-item">
+            <div class="meta-label">诊断类型</div>
+            <div class="meta-value">{{ diagnosis_type }}</div>
+        </div>
+        <div class="meta-item">
+            <div class="meta-label">规则版本</div>
+            <div class="meta-value">{{ rule_version }}</div>
+        </div>
+    </div>
+</div>
+
+<!-- 快速导航栏 -->
+<div class="quick-nav">
+    <span class="quick-nav-title">📑 快速导航:</span>
+    {% if root_causes and root_causes|length > 0 %}
+    <a href="#root-causes" class="nav-chip critical">🔴 根因分析 ({{ root_causes|length }})</a>
+    {% endif %}
+    {% if connectivity %}
+    <a href="#connectivity" class="nav-chip">🔍 连通性测试</a>
+    {% endif %}
+    {% if connectivity.dns_split_details or connectivity.cpe_link_routing %}
+    <a href="#network-probes" class="nav-chip">🌐 网络探测</a>
+    {% endif %}
+    {% if system_info %}
+    <a href="#system-info" class="nav-chip">💻 系统环境</a>
+    {% endif %}
+    {% if recommendations and recommendations|length > 0 %}
+    <a href="#recommendations" class="nav-chip">💡 建议 ({{ recommendations|length }})</a>
+    {% endif %}
+</div>
+
+<!-- 执行摘要 -->
+<div class="section" id="summary">
+    <div class="section-header">
+        <h2>📊 执行摘要</h2>
+    </div>
+    <div class="section-content">
+        <div class="summary-box {% if severity.value == 'critical' %}critical{% elif severity.value == 'warning' %}warning{% elif severity.value == 'info' or severity.value == 'success' %}success{% endif %}">
+            <p style="font-size: 1.2em; margin-bottom: 15px;">
+                <strong>严重程度:</strong> 
+                <span class="severity-badge severity-{{ severity.value }}">
+                    {% if severity.value == 'critical' %}🔴{% elif severity.value == 'error' %}🟠{% elif severity.value == 'warning' %}🟡{% else %}🔵{% endif %}
+                    {{ severity.value | upper }}
+                </span>
+            </p>
+            <div class="confidence-meter-container">
+                <span class="confidence-label">综合置信度:</span>
+                <div class="confidence-meter">
+                    <div class="confidence-fill" style="width: {{ confidence }}%"></div>
+                </div>
+                <span class="confidence-value">{{ confidence }}%</span>
+            </div>
+            <p style="margin-top: 15px; font-size: 1.05em;"><strong>总结:</strong> {{ summary }}</p>
+        </div>
+    </div>
+</div>
+
+<!-- 连通性状态 -->
+{% if connectivity %}
+<div class="section" id="connectivity">
+    <div class="section-header collapsible collapsed">
+        <h2>🔍 连通性测试</h2>
+    </div>
+    <div class="section-content collapse-content hidden">
+        <!-- 网关状态卡片 -->
+        <div class="card">
+            <div class="card-header">
+                <div class="card-title">网关连通性</div>
+                <span class="status-indicator {% if connectivity.gateway_status == 'ok' %}status-ok{% elif connectivity.gateway_status == 'packet_loss' %}status-warning{% else %}status-error{% endif %}">
+                    {% if connectivity.gateway_status == 'ok' %}✅{% elif connectivity.gateway_status == 'packet_loss' %}⚠️{% else %}❌{% endif %}
+                    {{ '正常' if connectivity.gateway_status == 'ok' else ('丢包' if connectivity.gateway_status == 'packet_loss' else '不可达') }}
+                </span>
+            </div>
+            <table>
+                <tr>
+                    <td><strong>网关地址</strong></td>
+                    <td class="font-mono">{{ connectivity.gateway_ip }}</td>
+                </tr>
+                <tr>
+                    <td><strong>往返延迟 (RTT)</strong></td>
+                    <td>{{ "%.1f"|format(connectivity.gateway_rtt) if connectivity.gateway_rtt > 0 else 'N/A' }} ms</td>
+                </tr>
+                <tr>
+                    <td><strong>丢包率</strong></td>
+                    <td>
+                        <span class="{% if connectivity.gateway_loss_rate == 0 %}status-ok{% elif connectivity.gateway_loss_rate < 0.05 %}status-warning{% else %}status-error{% endif %}" style="padding: 4px 10px; border-radius: 12px; display: inline-block;">
+                            {{ "%.1f"|format(connectivity.gateway_loss_rate * 100) }}%
+                        </span>
+                    </td>
+                </tr>
+            </table>
+        </div>
+
+        <!-- 互联网目标探测 -->
+        {% if connectivity.internet_targets %}
+        <div class="card mt-20">
+            <div class="card-header">
+                <div class="card-title">互联网可达性</div>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th>目标主机</th>
+                        <th>分类</th>
+                        <th>状态</th>
+                        <th>RTT</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for target in connectivity.internet_targets %}
+                    <tr>
+                        <td><strong>{{ target.host }}</strong></td>
+                        <td>
+                            <span class="tag {% if target.category == 'domestic' %}tag-domestic{% else %}tag-international{% endif %}">
+                                {{ '🇨🇳 国内' if target.category == 'domestic' else '🌍 国际' }}
+                            </span>
+                        </td>
+                        <td>
+                            <span class="status-indicator {% if target.success %}status-ok{% else %}status-error{% endif %}">
+                                {{ '✅ 可达' if target.success else '❌ 不可达' }}
+                            </span>
+                        </td>
+                        <td>{{ "%.1f"|format(target.rtt) if target.rtt > 0 else 'N/A' }} ms</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            
+            <!-- 成功率统计 -->
+            <div class="info-box info mt-20">
+                <div class="info-box-title">📈 成功率统计</div>
+                <div class="info-box-content">
+                    <div class="flex-center" style="margin-bottom: 10px;">
+                        <strong>国内目标:</strong>
+                        <div class="progress-bar" style="flex: 1; margin-left: 10px;">
+                            <div class="progress-fill" style="width: {{ connectivity.domestic_success_rate }}%"></div>
+                        </div>
+                        <span style="margin-left: 10px; font-weight: 600;">{{ connectivity.domestic_success_rate }}%</span>
+                    </div>
+                    <div class="flex-center">
+                        <strong>国际目标:</strong>
+                        <div class="progress-bar" style="flex: 1; margin-left: 10px;">
+                            <div class="progress-fill" style="width: {{ connectivity.international_success_rate }}%"></div>
+                        </div>
+                        <span style="margin-left: 10px; font-weight: 600;">{{ connectivity.international_success_rate }}%</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endif %}
+
+<!-- 网络探测 -->
+{% if connectivity.dns_split_details or connectivity.cpe_link_routing %}
+<div class="section" id="network-probes">
+    <div class="section-header collapsible collapsed">
+        <h2>🌐 网络探测</h2>
+    </div>
+    <div class="section-content collapse-content hidden">
+        
+        <!-- DNS解析一致性测试 -->
+        {% if connectivity.dns_split_details %}
+        <div class="card">
+            <div class="card-header">
+                <div class="card-title">DNS解析一致性测试</div>
+                <span class="status-indicator {% if connectivity.dns_split_detected %}status-warning{% else %}status-ok{% endif %}">
+                    {{ '⚠️ 存在地域差异' if connectivity.dns_split_detected else '✅ 全球一致' }}
+                </span>
+            </div>
+            <div class="card-description">
+                通过向不同地区的DNS服务器发起查询，检测同一域名的解析结果是否一致，评估DNS服务的稳定性和地域调度策略。
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th>测试域名</th>
+                        <th>DNS区域</th>
+                        <th>解析结果</th>
+                        <th>一致性</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for detail in connectivity.dns_split_details %}
+                        <!-- 国内DNS解析结果 -->
+                        {% if detail.domestic_ips and detail.domestic_ips != '{}' %}
+                        <tr>
+                            <td><strong>{{ detail.domain }}</strong></td>
+                            <td>
+                                <span class="tag tag-domestic">🇨🇳 国内DNS</span>
+                                <br/>
+                                <small style="color: var(--text-secondary);">114.114.114.114, 223.5.5.5</small>
+                            </td>
+                            <td class="font-mono" style="max-width: 300px; word-break: break-all;">
+                                {{ detail.domestic_ips }}
+                            </td>
+                            <td rowspan="2">
+                                <span class="tag {% if detail.is_split %}tag-international{% else %}tag-domestic{% endif %}">
+                                    {{ '存在地域差异' if detail.is_split else '全球一致' }}
+                                </span>
+                            </td>
+                        </tr>
+                        {% endif %}
+                        
+                        <!-- 国际DNS解析结果 -->
+                        {% if detail.international_ips and detail.international_ips != '{}' %}
+                        <tr>
+                            <td><strong>{{ detail.domain }}</strong></td>
+                            <td>
+                                <span class="tag tag-international">🌍 国际DNS</span>
+                                <br/>
+                                <small style="color: var(--text-secondary);">8.8.8.8, 1.1.1.1</small>
+                            </td>
+                            <td class="font-mono" style="max-width: 300px; word-break: break-all;">
+                                {{ detail.international_ips }}
+                            </td>
+                        </tr>
+                        {% endif %}
+                    {% endfor %}
+                </tbody>
+            </table>
+            
+            <!-- 说明框 -->
+            <div class="info-box mt-20">
+                <div class="info-box-title">💡 验证说明</div>
+                <ul style="margin: 0; padding-left: 20px; line-height: 1.8;">
+                    <li><strong>测试目的</strong>：验证DNS配置是否正确，是否存在地域性解析策略</li>
+                    <li><strong>国内DNS</strong>：使用 114.114.114.114 和 223.5.5.5（中国电信/阿里DNS）</li>
+                    <li><strong>国际DNS</strong>：使用 8.8.8.8 和 1.1.1.1（Google/Cloudflare DNS）</li>
+                    <li><strong>一致性判定</strong>：同一域名在不同区域DNS下解析出相同IP则判定为"全球一致"</li>
+                    <li><strong>地域差异</strong>：若解析结果不同，可能是CDN智能调度或DNS污染防护策略</li>
+                </ul>
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- 业务路径路由追踪 -->
+        {% if connectivity.cpe_link_routing %}
+        <div class="card mt-20">
+            <div class="card-header">
+                <div class="card-title">业务路径路由追踪</div>
+                <span class="badge-count badge-link">{{ connectivity.cpe_link_routing.link_distribution|length }} 条路径</span>
+            </div>
+            <div class="card-description">
+                通过Traceroute追踪访问不同目标域名的完整网络路径，分析流量出口和中间节点，验证网络路径是否符合预期。
+            </div>
+            
+            <!-- 检测结果摘要 -->
+            <div class="info-box {% if connectivity.cpe_link_routing.is_multi_link %}warning{% else %}success{% endif %}">
+                <div class="info-box-title">
+                    {% if connectivity.cpe_link_routing.is_multi_link %}
+                    ⚠️ 检测到多路径路由
+                    {% else %}
+                    ✅ 单路径出口
+                    {% endif %}
+                </div>
+                <div class="info-box-content">
+                    {% if connectivity.cpe_link_routing.is_multi_link %}
+                    发现 <strong>{{ connectivity.cpe_link_routing.multi_link_count }}</strong> 条不同的网络路径，表明系统根据目标地址进行了策略路由分流。
+                    {% else %}
+                    所有测试域名使用相同的出口链路，未检测到分流行为。
+                    {% endif %}
+                </div>
+            </div>
+
+            <!-- 路径分布详情 -->
+            {% if connectivity.cpe_link_routing.link_distribution %}
+            <div class="mt-20">
+                <h4 style="margin-bottom: 10px;">📊 路径分布</h4>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>路径指纹</th>
+                            <th>经过域名</th>
+                            <th>跳数</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for fingerprint, domains in connectivity.cpe_link_routing.link_distribution.items() %}
+                        <tr>
+                            <td class="font-mono" style="font-size: 0.85em; max-width: 400px; word-break: break-all;">
+                                {{ fingerprint }}
+                            </td>
+                            <td>
+                                {% for domain in domains[:3] %}
+                                <span class="tag tag-unknown" style="margin: 2px;">{{ domain }}</span>
+                                {% endfor %}
+                                {% if domains|length > 3 %}
+                                <span class="tag tag-unknown" style="margin: 2px;">+{{ domains|length - 3 }} 更多</span>
+                                {% endif %}
+                            </td>
+                            <td>{{ domains|length }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% endif %}
+
+            <!-- 详细路径分析 -->
+            {% if connectivity.cpe_link_routing.domain_results %}
+            <div class="mt-20">
+                <h4 style="margin-bottom: 10px;">🔍 详细路径分析</h4>
+                {% for dr in connectivity.cpe_link_routing.domain_results[:5] %}
+                <details class="collapse-panel" style="margin-bottom: 10px;">
+                    <summary class="collapse-header">
+                        <strong>{{ dr.domain }}</strong>
+                        <span class="tag tag-unknown" style="margin-left: 10px;">{{ dr.full_path|length }} 跳</span>
+                    </summary>
+                    <div class="collapse-content" style="padding: 15px;">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>跳数</th>
+                                    <th>IP地址</th>
+                                    <th>延迟</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for hop in dr.full_path[:10] %}
+                                <tr>
+                                    <td>{{ hop.hop_number }}</td>
+                                    <td class="font-mono">
+                                        {% for ip in hop.ip_addresses %}
+                                        {{ ip }}<br/>
+                                        {% endfor %}
+                                    </td>
+                                    <td>
+                                        {% for rtt in hop.rtts[:3] %}
+                                        {{ "%.1f"|format(rtt) }} ms<br/>
+                                        {% endfor %}
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                                {% if dr.full_path|length > 10 %}
+                                <tr>
+                                    <td colspan="3" style="text-align: center; color: var(--text-secondary);">
+                                        ... 还有 {{ dr.full_path|length - 10 }} 跳（点击"证据附录"查看完整路径）
+                                    </td>
+                                </tr>
+                                {% endif %}
+                            </tbody>
+                        </table>
+                    </div>
+                </details>
+                {% endfor %}
+            </div>
+            {% endif %}
+
+            <!-- 说明框 -->
+            <div class="info-box info mt-20">
+                <div class="info-box-title">💡 验证说明</div>
+                <ul style="margin: 0; padding-left: 20px; line-height: 1.8;">
+                    <li><strong>测试目的</strong>：验证业务流量是否按策略路由规则正确分流</li>
+                    <li><strong>检测方法</strong>：对多个目标域名执行Traceroute，对比网络路径指纹</li>
+                    <li><strong>路径指纹</strong>：提取Traceroute前N跳的IP序列作为路径标识</li>
+                    <li><strong>分流判定</strong>：不同域名经过不同路径则判定为"多路径路由"</li>
+                    <li><strong>应用场景</strong>：跨境加速、直播专线、办公/生产网隔离等策略路由验证</li>
+                </ul>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endif %}
+
+<!-- 系统环境信息 -->
+{% if system_info %}
+<div class="section" id="system-info">
+    <div class="section-header collapsible collapsed">
+        <h2>💻 系统环境信息</h2>
+    </div>
+    <div class="section-content collapse-content hidden">
+        <!-- 网卡配置 -->
+        <div class="card">
+            <div class="card-header">
+                <div class="card-title">网卡配置</div>
+                <span class="badge-count">{{ system_info.adapters|length }} 个网卡</span>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th>网卡名称</th>
+                        <th>MAC 地址</th>
+                        <th>IP 地址</th>
+                        <th>默认网关</th>
+                        <th>连接状态</th>
+                        <th>速率</th>
+                        <th>配置方式</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for adapter in system_info.adapters %}
+                    <tr>
+                        <td><strong>{{ adapter.name }}</strong></td>
+                        <td class="font-mono">{{ adapter.mac }}</td>
+                        <td class="font-mono">
+                            {% if adapter.ips|length > 1 %}
+                                <!-- 多个IP地址，每行显示一个 -->
+                                <div style="line-height: 1.6;">
+                                    {% for ip in adapter.ips %}
+                                        <div>{{ ip }}</div>
+                                    {% endfor %}
+                                </div>
+                            {% else %}
+                                <!-- 单个IP地址 -->
+                                {{ adapter.ip_display }}
+                            {% endif %}
+                        </td>
+                        <td class="font-mono">{{ adapter.gateway or 'N/A' }}</td>
+                        <td>
+                            <span class="status-indicator {% if adapter.status == '已连接' %}status-ok{% else %}status-error{% endif %}">
+                                {{ adapter.status }}
+                            </span>
+                        </td>
+                        <td>{{ adapter.speed }}</td>
+                        <td>
+                            <span class="tag {% if adapter.dhcp == 'DHCP' %}tag-domestic{% else %}tag-international{% endif %}">
+                                {{ adapter.dhcp }}
+                            </span>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <!-- IP 与路由配置 -->
+        <div class="card mt-20">
+            <div class="card-header">
+                <div class="card-title">IP 与路由配置</div>
+            </div>
+            <table>
+                <tr>
+                    <td style="width: 30%;"><strong>当前默认网关</strong></td>
+                    <td class="font-mono">{{ system_info.ip_config.gateway or 'N/A' }}</td>
+                </tr>
+                <tr>
+                    <td><strong>DNS 服务器</strong></td>
+                    <td class="font-mono">{{ system_info.ip_config.dns_servers or 'N/A' }}</td>
+                </tr>
+            </table>
+        </div>
+
+        <!-- 关键路由表项 -->
+        {% if system_info.routes %}
+        <div class="card mt-20">
+            <div class="card-header">
+                <div class="card-title">关键路由表项</div>
+                <span class="badge-count">{{ system_info.routes|length }} 条</span>
+            </div>
+            <div class="card-description">
+                展示对网络连接至关重要的路由条目，包括默认路由、网关路由和DNS服务器路由。这些路由决定了流量的出口路径。
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th>目标网络</th>
+                        <th>子网掩码</th>
+                        <th>下一跳网关</th>
+                        <th>Metric</th>
+                        <th>路由类型</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for route in system_info.routes %}
+                    <tr>
+                        <td class="font-mono"><strong>{{ route.dest }}</strong></td>
+                        <td class="font-mono">{{ route.mask }}</td>
+                        <td class="font-mono">{{ route.gw }}</td>
+                        <td>{{ route.metric }}</td>
+                        <td>
+                            {% if route.dest == '0.0.0.0' and route.mask == '0.0.0.0' %}
+                                <span class="tag" style="background: #dc3545; color: white;">🚪 默认路由</span>
+                            {% elif route.gw and (route.gw.startswith('192.168.') or route.gw.startswith('10.')) %}
+                                <span class="tag tag-domestic">🏠 网关路由</span>
+                            {% elif route.dest in ['8.8.8.8', '8.8.4.4', '114.114.114.114', '223.5.5.5', '1.1.1.1'] %}
+                                <span class="tag tag-international">🌐 DNS路由</span>
+                            {% else %}
+                                <span class="tag tag-unknown">⚙️ 静态路由</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            
+            <!-- 说明框 -->
+            <div class="info-box info mt-20">
+                <div class="info-box-title">💡 路由类型说明</div>
+                <ul style="margin: 0; padding-left: 20px; line-height: 1.8;">
+                    <li><strong>🚪 默认路由 (0.0.0.0/0)</strong>：所有未匹配其他路由的流量都通过此路由转发，是网络的"最后出口"</li>
+                    <li><strong>🏠 网关路由</strong>：指向本地网关（通常是路由器或CPE设备）的路由，用于访问局域网或互联网</li>
+                    <li><strong>🌐 DNS路由</strong>：指向DNS服务器的专用路由，确保域名解析请求能正确到达</li>
+                    <li><strong>⚙️ 静态路由</strong>：管理员手动配置的策略路由，用于特定业务分流场景</li>
+                </ul>
+                <p style="margin-top: 10px; font-size: 0.9em; color: var(--text-secondary);">
+                    💡 <strong>提示</strong>：本表格仅展示对网络连接至关重要的路由条目（最多4条），包括默认路由、网关路由、DNS路由和关键静态路由。
+                </p>
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- 安全与代理 -->
+        <div class="card mt-20">
+            <div class="card-header">
+                <div class="card-title">安全与代理配置</div>
+            </div>
+            <table>
+                <tr>
+                    <td style="width: 30%;"><strong>防火墙状态</strong></td>
+                    <td>{{ system_info.firewall }}</td>
+                </tr>
+                <tr>
+                    <td><strong>代理状态</strong></td>
+                    <td>{{ system_info.proxy }}</td>
+                </tr>
+            </table>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<!-- 根因分析 -->
+{% if root_causes %}
+<div class="section" id="root-causes">
+    <div class="section-header collapsible">
+        <h2>🔴 根因分析</h2>
+        <span class="badge-count" style="background: var(--color-critical);">{{ root_causes | length }} 个问题</span>
+    </div>
+    <div class="section-content collapse-content">
+        {% for cause in root_causes %}
+        <div class="card" style="border-left: 4px solid {% if cause.severity.value == 'critical' %}var(--color-critical){% elif cause.severity.value == 'error' %}var(--color-error){% else %}var(--color-warning){% endif %};">
+            <div class="card-header">
+                <div class="card-title">[{{ cause.cause_id }}] {{ cause.title }}</div>
+                <span class="severity-badge severity-{{ cause.severity.value }}">{{ cause.severity.value | upper }}</span>
+            </div>
+            <div class="card-description">{{ cause.description }}</div>
+            <div class="card-meta">
+                <div class="card-meta-item">
+                    <span class="card-meta-label">置信度:</span>
+                    <span>{{ (cause.confidence * 100) | int }}%</span>
+                </div>
+                <div class="card-meta-item">
+                    <span class="card-meta-label">匹配规则:</span>
+                    <span class="font-mono">{{ cause.matched_rules | join(', ') }}</span>
+                </div>
+                {% if cause.evidence_refs %}
+                <div class="card-meta-item">
+                    <span class="card-meta-label">证据引用:</span>
+                    <span>{{ cause.evidence_refs | join(', ') }}</span>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% else %}
+<div class="section">
+    <div class="section-content">
+        <div class="summary-box success">
+            <p style="font-size: 1.2em;">✅ 未发现明显网络配置问题。</p>
+            <p style="margin-top: 10px; color: var(--text-secondary);">系统运行正常，无需特殊操作。</p>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<!-- 诊断建议 -->
+{% if recommendations %}
+<div class="section" id="recommendations">
+    <div class="section-header collapsible collapsed">
+        <h2>💡 诊断建议</h2>
+        <span class="badge-count">{{ recommendations | length }} 条建议</span>
+    </div>
+    <div class="section-content collapse-content hidden">
+        <ul class="recommendation-list">
+            {% for rec in recommendations %}
+            <li class="recommendation-item priority-{{ rec.priority }}">
+                <span class="recommendation-priority">P{{ rec.priority }}</span>
+                <strong style="font-size: 1.05em;">{{ rec.action }}</strong>
+                {% if rec.reason %}
+                <br><span style="color: var(--text-secondary); font-size: 0.9em; margin-top: 5px; display: inline-block;">原因: {{ rec.reason }}</span>
+                {% endif %}
+                {% if rec.commands %}
+                <div class="code-block" style="margin-top: 12px;">
+                    {% for cmd in rec.commands %}
+                    <div>{{ cmd }}</div>
+                    {% endfor %}
+                </div>
+                {% endif %}
+            </li>
+            {% endfor %}
+        </ul>
+    </div>
+</div>
+{% endif %}
+
+<!-- 证据附录 -->
+{% if evidences %}
+<div class="section" id="evidences">
+    <div class="section-header collapsible collapsed">
+        <h2>📎 证据附录</h2>
+        <span class="badge-count">{{ evidences | length }} 项证据</span>
+    </div>
+    <div class="section-content collapse-content hidden">
+        <div class="info-box info mb-20">
+            <div class="info-box-title">💡 说明</div>
+            <div class="info-box-content">
+                本章节展示诊断过程中收集的原始数据，包括探测结果、系统配置快照、命令输出等。这些数据用于支持根因分析结论，供技术人员深入排查使用。
+            </div>
+        </div>
+
+        {% for evidence in evidences %}
+        <details class="collapse-panel" style="margin-bottom: 15px;">
+            <summary class="collapse-header">
+                <strong>{{ evidence.step_name }}</strong>
+                <span class="tag tag-unknown" style="margin-left: 10px;">{{ evidence.evidence_type or '通用' }}</span>
+            </summary>
+            <div class="collapse-content" style="padding: 15px;">
+                <p style="color: var(--text-secondary); margin-bottom: 15px;">{{ evidence.description }}</p>
+                
+                <!-- 探测结果详情 -->
+                {% if evidence.probe_results %}
+                <div style="margin-bottom: 15px;">
+                    <strong style="display: block; margin-bottom: 10px;">🔍 探测结果 ({{ evidence.probe_results|length }} 项)</strong>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>目标</th>
+                                <th>协议</th>
+                                <th>状态</th>
+                                <th>RTT (ms)</th>
+                                <th>丢包率</th>
+                                <th>详细信息</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for probe in evidence.probe_results %}
+                            <tr>
+                                <td class="font-mono">{{ probe.target.host if probe.target else 'N/A' }}</td>
+                                <td>
+                                    <span class="tag tag-unknown">
+                                        {{ probe.target.protocol.value if probe.target and probe.target.protocol else 'N/A' }}
+                                    </span>
+                                </td>
+                                <td>
+                                    <span class="status-indicator {% if probe.success %}status-ok{% else %}status-error{% endif %}">
+                                        {{ '✅ 成功' if probe.success else '❌ 失败' }}
+                                    </span>
+                                </td>
+                                <td>
+                                    {% if probe.metrics %}
+                                        {% if probe.metrics.rtt_avg is not none %}
+                                            {{ "%.1f"|format(probe.metrics.rtt_avg) }}
+                                        {% else %}
+                                            N/A
+                                        {% endif %}
+                                    {% else %}
+                                        N/A
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% if probe.metrics and probe.metrics.loss_rate is not none %}
+                                        {{ "%.1f"|format(probe.metrics.loss_rate * 100) }}%
+                                    {% else %}
+                                        N/A
+                                    {% endif %}
+                                </td>
+                                <td style="font-size: 0.85em; color: var(--text-secondary); max-width: 300px;">
+                                    {% if probe.metrics and probe.metrics.resolved_ips %}
+                                        DNS解析: {{ probe.metrics.resolved_ips|join(', ') }}
+                                    {% elif probe.error_message %}
+                                        错误: {{ probe.error_message }}
+                                    {% else %}
+                                        -
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% endif %}
+
+                <!-- 配置快照 -->
+                {% if evidence.config_snapshots %}
+                <div style="margin-bottom: 15px;">
+                    <strong style="display: block; margin-bottom: 10px;">⚙️ 配置快照</strong>
+                    {% for key, value in evidence.config_snapshots.items() %}
+                    <details style="margin-bottom: 10px; margin-left: 15px;">
+                        <summary style="cursor: pointer; font-weight: 500; color: var(--color-primary);">
+                            {{ key }}
+                        </summary>
+                        <div style="margin-top: 10px;">
+                            {% if value is mapping %}
+                                <!-- 字典类型：转换为表格或键值对列表 -->
+                                <table style="font-size: 0.9em;">
+                                    <tbody>
+                                        {% for k, v in value.items() %}
+                                        <tr>
+                                            <td style="width: 30%; font-weight: 500; padding: 8px; border-bottom: 1px solid var(--border-color);">{{ k }}</td>
+                                            <td style="padding: 8px; border-bottom: 1px solid var(--border-color);">
+                                                {% if v is string or v is number %}
+                                                    {{ v }}
+                                                {% elif v is sequence and v is not string %}
+                                                    <ul style="margin: 0; padding-left: 20px;">
+                                                        {% for item in v %}
+                                                        <li>{{ item }}</li>
+                                                        {% endfor %}
+                                                    </ul>
+                                                {% else %}
+                                                    {{ v }}
+                                                {% endif %}
+                                            </td>
+                                        </tr>
+                                        {% endfor %}
+                                    </tbody>
+                                </table>
+                            {% elif value is sequence and value is not string %}
+                                <!-- 列表类型：转换为项目列表 -->
+                                <ul style="margin: 0; padding-left: 20px;">
+                                    {% for item in value %}
+                                    <li style="margin-bottom: 5px;">{{ item }}</li>
+                                    {% endfor %}
+                                </ul>
+                            {% else %}
+                                <!-- 简单类型：直接显示 -->
+                                <div style="padding: 10px; background: var(--bg-secondary); border-radius: 6px; font-family: monospace; font-size: 0.9em;">
+                                    {{ value }}
+                                </div>
+                            {% endif %}
+                        </div>
+                    </details>
+                    {% endfor %}
+                </div>
+                {% endif %}
+
+                <!-- 原始命令输出 -->
+                {% if evidence.raw_output %}
+                <div>
+                    <strong style="display: block; margin-bottom: 10px;">📋 原始命令输出</strong>
+                    <div class="code-block">
+                        <button class="copy-btn" onclick="copyToClipboard(this)">复制</button>
+                        <pre><code>{{ evidence.raw_output }}</code></pre>
+                    </div>
+                </div>
+                {% endif %}
+            </div>
+        </details>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
+<!-- 页脚 -->
+<div style="text-align: center; color: var(--text-muted); font-size: 0.85em; margin-top: 40px; padding: 25px; border-top: 1px solid var(--border-color);">
+    <p>SD-WAN 桌面诊断专家 v1.0.0 | 报告生成于 {{ generated_at }}</p>
+    <p style="margin-top: 8px; font-size: 0.9em;">© 2026 SD-WAN Diagnostic Platform</p>
+</div>
+{% endblock %}

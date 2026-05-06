@@ -237,3 +237,6 @@ class SystemInfoSnapshot(BaseContract):
             "trace_id": self.trace_id,
             "timestamp": self.timestamp,
         }
+    
+    def __repr__(self):
+        return f"SystemInfoSnapshot(adapters={len(self.adapters)}, primary={self.primary_adapter.name if self.primary_adapter else None})"

@@ -37,15 +37,24 @@ class ToolRequest(BaseContract):
     
     def __init__(self, tool_name: str, parameters: Dict[str, Any] = None, 
                  timeout_seconds: Optional[int] = None, retry_count: Optional[int] = None,
-                 context: Dict[str, Any] = None):
-        """手动定义构造函数以解决字段顺序问题"""
+                 context: Dict[str, Any] = None, trace_id: Optional[str] = None):
+        """手动定义构造函数以解决字段顺序问题
+        
+        Args:
+            tool_name: 工具名称
+            parameters: 工具参数
+            timeout_seconds: 超时时间（秒）
+            retry_count: 重试次数
+            context: 执行上下文
+            trace_id: 追踪ID，如果提供则使用该值，否则自动生成
+        """
         # 不要调用super().__init__()，因为使用了@dataclass(slots=True, init=False)
         # 直接初始化BaseContract的字段
         import uuid
         from datetime import datetime, timezone
         
         self.id = str(uuid.uuid4())
-        self.trace_id = str(uuid.uuid4())
+        self.trace_id = trace_id or str(uuid.uuid4())
         self.timestamp = datetime.now(timezone.utc).isoformat()
         
         self.tool_name = tool_name

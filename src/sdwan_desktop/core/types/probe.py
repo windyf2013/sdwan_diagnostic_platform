@@ -31,7 +31,7 @@ class ProbeStatus(str, Enum):
 
 
 @dataclass(slots=True)
-class ProbeTarget(BaseContract):
+class ProbeTarget:
     """探测目标定义"""
     
     host: str
@@ -58,7 +58,7 @@ class ProbeMetric:
 
 
 @dataclass(slots=True)
-class ProbeResult(BaseContract):
+class ProbeResult:
     """单次探测结果"""
     
     target: ProbeTarget

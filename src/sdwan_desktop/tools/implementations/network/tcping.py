@@ -369,29 +369,16 @@ class TcpPortTool:
         Returns:
             (reader, writer) 元组
         """
-        # 设置socket选项
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        
-        # 绑定源地址（如果指定）
+        # 使用 asyncio.open_connection，它支持 local_addr 参数来绑定源地址
         if source_ip or source_port:
-            source_addr = (source_ip or "0.0.0.0", source_port or 0)
-            sock.bind(source_addr)
-        
-        # 创建连接
-        loop = asyncio.get_event_loop()
-        transport, protocol = await loop.create_connection(
-            lambda: asyncio.Protocol(),
-            host=ip,
-            port=port,
-            sock=sock
-        )
-        
-        # 获取reader/writer
-        reader = asyncio.StreamReader()
-        writer = asyncio.StreamWriter(
-            transport, protocol, reader, loop
-        )
+            local_addr = (source_ip or "0.0.0.0", source_port or 0)
+            reader, writer = await asyncio.open_connection(
+                host=ip, 
+                port=port, 
+                local_addr=local_addr
+            )
+        else:
+            reader, writer = await asyncio.open_connection(host=ip, port=port)
         
         return reader, writer
     

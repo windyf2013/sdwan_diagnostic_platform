@@ -208,18 +208,18 @@ class TraceRouteTool:
         """
         # 构建traceroute命令
         if self._is_windows:
-            # Windows使用tracert
-            cmd = ["tracert", "-h", str(max_hops), "-w", str(timeout * 1000), host]
+            # Windows使用tracert，-d 参数禁用反向DNS解析以缩短每跳查询时间
+            cmd = ["tracert", "-d", "-h", str(max_hops), "-w", str(timeout * 1000), host]
         else:
             # Linux使用traceroute
             if protocol == "icmp":
-                cmd = ["traceroute", "-I", "-m", str(max_hops), "-w", str(timeout), host]
+                cmd = ["traceroute", "-I", "-n", "-m", str(max_hops), "-w", str(timeout), host]
             elif protocol == "udp":
-                cmd = ["traceroute", "-m", str(max_hops), "-w", str(timeout), host]
+                cmd = ["traceroute", "-n", "-m", str(max_hops), "-w", str(timeout), host]
             elif protocol == "tcp":
-                cmd = ["traceroute", "-T", "-m", str(max_hops), "-w", str(timeout), host]
+                cmd = ["traceroute", "-T", "-n", "-m", str(max_hops), "-w", str(timeout), host]
             else:
-                cmd = ["traceroute", "-m", str(max_hops), "-w", str(timeout), host]
+                cmd = ["traceroute", "-n", "-m", str(max_hops), "-w", str(timeout), host]
         
         # 执行命令
         process = await asyncio.create_subprocess_exec(
@@ -257,7 +257,11 @@ class TraceRouteTool:
                 await asyncio.sleep(0.5)
                 if process.returncode is None:
                     process.kill()
-            except:
+                try:
+                    await process.wait()
+                except Exception:
+                    pass
+            except Exception:
                 pass
             raise
     
@@ -280,6 +284,7 @@ class TraceRouteTool:
         if is_windows:
             # Windows tracert输出解析
             # 示例: "  1     1 ms     1 ms     1 ms  192.168.1.1"
+            # 或: "  1    <1 ms    <1 ms    <1 ms  192.168.1.1"
             # 超时: "  3     *        *        *     Request timed out."
             pattern = r"^\s*(\d+)\s+([\d*<]+)\s+ms\s+([\d*<]+)\s+ms\s+([\d*<]+)\s+ms\s+(.+)"
             timeout_pattern = r"^\s*(\d+)\s+\*\s+\*\s+\*\s+Request timed out"
@@ -312,7 +317,7 @@ class TraceRouteTool:
                     rtt1 = self._parse_rtt(match.group(2))
                     rtt2 = self._parse_rtt(match.group(3))
                     rtt3 = self._parse_rtt(match.group(4))
-                    target = match.group(5)
+                    target = match.group(5).strip()
                     
                     # 解析IP和主机名
                     ip, hostname = self._parse_target(target)
@@ -367,13 +372,20 @@ class TraceRouteTool:
         """解析RTT字符串
         
         Args:
-            rtt_str: RTT字符串，如 "1.234" 或 "*"
+            rtt_str: RTT字符串，如 "1.234"、"<1" 或 "*"
             
         Returns:
             RTT值(ms)，解析失败返回None
         """
         if not rtt_str or rtt_str == "*":
             return None
+        
+        # 处理 "<1" 格式（表示小于1ms）
+        if rtt_str.startswith("<"):
+            try:
+                return float(rtt_str[1:])
+            except ValueError:
+                return 0.5  # 默认返回0.5ms作为估计值
         
         try:
             return float(rtt_str)

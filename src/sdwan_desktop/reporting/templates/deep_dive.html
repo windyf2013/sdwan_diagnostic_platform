@@ -1,0 +1,265 @@
+{% extends "base.html" %}
+
+{% block title %}SD-WAN 深度诊断报告{% endblock %}
+
+{% block content %}
+<!-- 报告头部 -->
+<div class="header">
+    <h1>🔬 SD-WAN 深度诊断报告</h1>
+    <div class="meta-info">
+        <div class="meta-item">
+            <div class="meta-label">报告 ID</div>
+            <div class="meta-value">{{ report_id }}</div>
+        </div>
+        <div class="meta-item">
+            <div class="meta-label">Trace ID</div>
+            <div class="meta-value">{{ trace_id }}</div>
+        </div>
+        <div class="meta-item">
+            <div class="meta-label">生成时间</div>
+            <div class="meta-value">{{ generated_at }}</div>
+        </div>
+        <div class="meta-item">
+            <div class="meta-label">诊断类型</div>
+            <div class="meta-value">{{ diagnosis_type }}</div>
+        </div>
+        <div class="meta-item">
+            <div class="meta-label">规则版本</div>
+            <div class="meta-value">{{ rule_version }}</div>
+        </div>
+    </div>
+</div>
+
+<!-- 快速导航栏 -->
+<div class="quick-nav">
+    <span class="quick-nav-title">📑 快速导航:</span>
+    {% if root_causes and root_causes|length > 0 %}
+    <a href="#root-causes" class="nav-chip critical">🔴 根因分析 ({{ root_causes|length }})</a>
+    {% endif %}
+    <a href="#topology" class="nav-chip">🕸️ 网络拓扑</a>
+    {% if recommendations and recommendations|length > 0 %}
+    <a href="#recommendations" class="nav-chip">💡 修复建议 ({{ recommendations|length }})</a>
+    {% endif %}
+</div>
+
+<!-- 执行摘要 -->
+<div class="section" id="summary">
+    <div class="section-header">
+        <h2>📊 诊断摘要</h2>
+    </div>
+    <div class="section-content">
+        <div class="summary-box {% if severity.value == 'critical' %}critical{% elif severity.value == 'warning' %}warning{% else %}success{% endif %}">
+            <p style="font-size: 1.2em; margin-bottom: 15px;">
+                <strong>严重程度:</strong> 
+                <span class="severity-badge severity-{{ severity.value }}">
+                    {% if severity.value == 'critical' %}🔴{% elif severity.value == 'error' %}🟠{% elif severity.value == 'warning' %}🟡{% else %}🔵{% endif %}
+                    {{ severity.value | upper }}
+                </span>
+            </p>
+            <div class="confidence-meter-container">
+                <span class="confidence-label">综合置信度:</span>
+                <div class="confidence-meter">
+                    <div class="confidence-fill" style="width: {{ confidence }}%"></div>
+                </div>
+                <span class="confidence-value">{{ confidence }}%</span>
+            </div>
+            <p style="margin-top: 15px; font-size: 1.05em;"><strong>总结:</strong> {{ summary }}</p>
+        </div>
+    </div>
+</div>
+
+<!-- 网络拓扑结构 -->
+<div class="section" id="topology">
+    <div class="section-header collapsible collapsed">
+        <h2>🕸️ 网络拓扑结构</h2>
+    </div>
+    <div class="section-content collapse-content hidden">
+        <div class="info-box info">
+            <div class="info-box-title">💡 拓扑说明</div>
+            <div class="info-box-content">
+                以下拓扑图展示了 PC、CPE 设备以及目标服务器之间的网络连接关系。节点颜色代表设备类型，连线表示网络连接。
+            </div>
+        </div>
+        
+        <div id="topology-container" class="mermaid" style="margin-top: 20px; padding: 30px; background: var(--bg-light); border-radius: var(--radius-md); text-align: center;">
+            graph TD;
+            {% for node in topology.nodes %}
+            {{ node.id }}["{{ node.name }}<br/>{{ node.ip_address or 'N/A' }}"];
+            {% endfor %}
+            
+            {% for edge in topology.edges %}
+            {{ edge.source_id }} -->|"{{ edge.link_type }}"| {{ edge.target_id }};
+            {% endfor %}
+        </div>
+
+        <!-- 节点详细信息 -->
+        {% if topology.nodes %}
+        <div class="card mt-20">
+            <div class="card-header">
+                <div class="card-title">节点详细信息</div>
+                <span class="badge-count">{{ topology.nodes|length }} 个节点</span>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th>节点名称</th>
+                        <th>IP 地址</th>
+                        <th>设备类型</th>
+                        <th>状态</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for node in topology.nodes %}
+                    <tr>
+                        <td><strong>{{ node.name }}</strong></td>
+                        <td class="font-mono">{{ node.ip_address or 'N/A' }}</td>
+                        <td>
+                            {% if 'PC' in node.name or 'Client' in node.name %}
+                                <span class="tag tag-domestic">💻 客户端</span>
+                            {% elif 'CPE' in node.name %}
+                                <span class="tag badge-link">📡 CPE</span>
+                            {% else %}
+                                <span class="tag tag-international">🖥️ 服务器</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <span class="status-indicator status-ok">✅ 在线</span>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<!-- 根因分析 -->
+{% if root_causes %}
+<div class="section" id="root-causes">
+    <div class="section-header collapsible">
+        <h2>🔴 根因分析</h2>
+        <span class="badge-count" style="background: var(--color-critical);">{{ root_causes | length }} 个问题</span>
+    </div>
+    <div class="section-content collapse-content">
+        {% for cause in root_causes %}
+        <div class="card" style="border-left: 4px solid {% if cause.severity.value == 'critical' %}var(--color-critical){% elif cause.severity.value == 'error' %}var(--color-error){% else %}var(--color-warning){% endif %};">
+            <div class="card-header">
+                <div class="card-title">[{{ cause.cause_id }}] {{ cause.title }}</div>
+                <span class="severity-badge severity-{{ cause.severity.value }}">{{ cause.severity.value | upper }}</span>
+            </div>
+            <div class="card-description">{{ cause.description }}</div>
+            <div class="card-meta">
+                <div class="card-meta-item">
+                    <span class="card-meta-label">置信度:</span>
+                    <span>{{ "%.0f"|format(cause.confidence * 100) }}%</span>
+                </div>
+                <div class="card-meta-item">
+                    <span class="card-meta-label">匹配规则:</span>
+                    <span class="font-mono">{{ cause.matched_rules | join(', ') }}</span>
+                </div>
+                {% if cause.evidence_refs %}
+                <div class="card-meta-item">
+                    <span class="card-meta-label">证据引用:</span>
+                    <span>{{ cause.evidence_refs | join(', ') }}</span>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% else %}
+<div class="section">
+    <div class="section-content">
+        <div class="summary-box success">
+            <p style="font-size: 1.2em;">✅ 未检测到明显的配置或连通性故障。</p>
+            <p style="margin-top: 10px; color: var(--text-secondary);">系统运行正常，无需特殊操作。</p>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<!-- 修复建议 -->
+{% if recommendations %}
+<div class="section" id="recommendations">
+    <div class="section-header collapsible collapsed">
+        <h2>💡 修复建议</h2>
+        <span class="badge-count">{{ recommendations | length }} 条建议</span>
+    </div>
+    <div class="section-content collapse-content hidden">
+        <ul class="recommendation-list">
+            {% for rec in recommendations %}
+            <li class="recommendation-item priority-{{ rec.priority }}">
+                <span class="recommendation-priority">P{{ rec.priority }}</span>
+                <strong style="font-size: 1.05em;">{{ rec.action }}</strong>
+                <p style="margin-top: 8px; color: var(--text-secondary);">{{ rec.expected_outcome }}</p>
+                {% if rec.commands %}
+                <div class="code-block" style="margin-top: 12px;">
+                    {% for cmd in rec.commands %}
+                    <div>{{ cmd }}</div>
+                    {% endfor %}
+                </div>
+                {% endif %}
+            </li>
+            {% endfor %}
+        </ul>
+    </div>
+</div>
+{% else %}
+<div class="section">
+    <div class="section-content">
+        <div class="summary-box success">
+            <p style="font-size: 1.1em;">当前无需特殊操作，系统运行正常。</p>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<!-- 页脚 -->
+<div style="text-align: center; color: var(--text-muted); font-size: 0.85em; margin-top: 40px; padding: 25px; border-top: 1px solid var(--border-color);">
+    <p>SD-WAN 桌面诊断专家 v1.0.0 | 报告生成于 {{ generated_at }}</p>
+    <p style="margin-top: 8px; font-size: 0.9em;">© 2026 SD-WAN Diagnostic Platform</p>
+</div>
+{% endblock %}
+
+{% block extra_css %}
+<style>
+    /* Mermaid 图表样式优化 */
+    .mermaid {
+        font-family: var(--font-family);
+    }
+    
+    .mermaid .node rect,
+    .mermaid .node circle,
+    .mermaid .node ellipse,
+    .mermaid .node polygon {
+        fill: #ffffff !important;
+        stroke: #667eea !important;
+        stroke-width: 2px !important;
+    }
+    
+    .mermaid .edgeLabel {
+        background-color: white !important;
+        padding: 4px 8px !important;
+        border-radius: 4px !important;
+        font-size: 0.85em !important;
+    }
+</style>
+{% endblock %}
+
+{% block extra_js %}
+<script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({ 
+        startOnLoad: true,
+        theme: 'default',
+        securityLevel: 'loose',
+        flowchart: {
+            useMaxWidth: true,
+            htmlLabels: true,
+            curve: 'basis'
+        }
+    });
+</script>
+{% endblock %}
