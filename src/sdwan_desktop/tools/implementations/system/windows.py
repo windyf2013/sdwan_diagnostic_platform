@@ -167,6 +167,9 @@ class WindowsSystemTool:
         if collect_options["adapters"]:
             try:
                 snapshot.adapters = await self._get_network_adapters(ctx)
+                logger.debug(f"[Tool] 采集到 {len(snapshot.adapters)} 个网卡", extra={"trace_id": ctx.trace_id})
+                for i, adapter in enumerate(snapshot.adapters):
+                    logger.debug(f"[Tool] 网卡 {i}: name={adapter.name}, is_connected={adapter.is_connected}, ip={adapter.ip_addresses}, gw={adapter.default_gateway}", extra={"trace_id": ctx.trace_id})
             except Exception as e:
                 logger.warning(f"采集网卡信息失败: {e}", extra={"trace_id": ctx.trace_id})
         
@@ -241,26 +244,36 @@ class WindowsSystemTool:
             wmi_client = wmi.WMI()
             
             for nic in wmi_client.Win32_NetworkAdapterConfiguration(IPEnabled=True):
-                adapter = AdapterInfo(
-                    name=nic.Description or "Unknown",
-                    description=nic.Description or "Unknown",
-                    mac_address=nic.MACAddress or "00:00:00:00:00:00",
-                    adapter_type=self._detect_adapter_type(nic.Description or ""),
-                    status=AdapterStatus.CONNECTED if nic.IPEnabled else AdapterStatus.DISCONNECTED,
-                    is_connected=nic.IPEnabled,
-                    speed_mbps=self._get_adapter_speed(nic),
-                    ip_addresses=list(nic.IPAddress) if nic.IPAddress else [],
-                    ip_subnets=list(nic.IPSubnet) if nic.IPSubnet else [],
-                    default_gateway=nic.DefaultIPGateway[0] if nic.DefaultIPGateway else None,
-                    dhcp_enabled=nic.DHCPEnabled,
-                    dns_servers=list(nic.DNSServerSearchOrder) if nic.DNSServerSearchOrder else [],
-                    dns_suffix=nic.DNSDomainSuffixSearchOrder[0] if nic.DNSDomainSuffixSearchOrder else None,
-                    mtu=nic.MTU or 1500,
-                    physical_address=nic.PhysicalAddress,
-                    manufacturer=nic.Manufacturer,
-                    driver_version=nic.DriverVersion,
-                )
-                adapters.append(adapter)
+                try:
+                    # 安全获取各个属性，处理可能的 COMError 或 AttributeError
+                    def safe_get(obj, attr, default=None):
+                        try:
+                            return getattr(obj, attr, default)
+                        except Exception:
+                            return default
+
+                    adapter = AdapterInfo(
+                        name=safe_get(nic, "Description", "Unknown"),
+                        description=safe_get(nic, "Description", "Unknown"),
+                        mac_address=safe_get(nic, "MACAddress", "00:00:00:00:00:00"),
+                        adapter_type=self._detect_adapter_type(safe_get(nic, "Description", "")),
+                        status=AdapterStatus.CONNECTED if safe_get(nic, "IPEnabled") else AdapterStatus.DISCONNECTED,
+                        is_connected=safe_get(nic, "IPEnabled"),
+                        speed_mbps=self._get_adapter_speed(nic),
+                        ip_addresses=list(safe_get(nic, "IPAddress")) if safe_get(nic, "IPAddress") else [],
+                        ip_subnets=list(safe_get(nic, "IPSubnet")) if safe_get(nic, "IPSubnet") else [],
+                        default_gateway=safe_get(nic, "DefaultIPGateway")[0] if safe_get(nic, "DefaultIPGateway") else None,
+                        dhcp_enabled=safe_get(nic, "DHCPEnabled"),
+                        dns_servers=list(safe_get(nic, "DNSServerSearchOrder")) if safe_get(nic, "DNSServerSearchOrder") else [],
+                        dns_suffix=safe_get(nic, "DNSDomainSuffixSearchOrder")[0] if safe_get(nic, "DNSDomainSuffixSearchOrder") else None,
+                        mtu=safe_get(nic, "MTU") or 1500,
+                        physical_address=safe_get(nic, "PhysicalAddress"),
+                        manufacturer=safe_get(nic, "Manufacturer"),
+                        driver_version=safe_get(nic, "DriverVersion"),
+                    )
+                    adapters.append(adapter)
+                except Exception as e:
+                    logger.warning(f"解析单个网卡配置失败: {e}", extra={"trace_id": ctx.trace_id})
                 
         except ImportError:
             # WMI不可用，使用ipconfig命令
@@ -295,9 +308,123 @@ class WindowsSystemTool:
             output = result.stdout
             
             # 解析ipconfig输出
-            # 这里需要实现复杂的解析逻辑
-            # 简化实现：返回空列表
-            logger.warning("ipconfig解析未实现，返回空网卡列表", extra={"trace_id": ctx.trace_id})
+            current_adapter = None
+            for line in output.splitlines():
+                line_stripped = line.strip()
+                if not line_stripped:
+                    continue
+                
+                # 检测新适配器开始
+                is_new_adapter = False
+                adapter_name = ""
+                
+                # 格式1: "以太网适配器 名称:" (中文系统)
+                # 格式2: "Ethernet adapter Name:" (英文系统)
+                if line_stripped.startswith("以太网适配器") or line_stripped.startswith("无线局域网适配器"):
+                    is_new_adapter = True
+                    # 提取冒号前的部分，去掉前缀
+                    if ":" in line_stripped:
+                        adapter_name = line_stripped.split(":")[0].strip()
+                        if "适配器" in adapter_name:
+                            adapter_name = adapter_name.split("适配器", 1)[1].strip()
+                elif line_stripped.lower().startswith("ethernet adapter") or line_stripped.lower().startswith("wireless lan adapter"):
+                    is_new_adapter = True
+                    if ":" in line_stripped:
+                        adapter_name = line_stripped.split(":")[0].strip()
+                        # 去掉 "Ethernet adapter" 或 "Wireless LAN adapter" 前缀
+                        if "adapter" in adapter_name.lower():
+                            adapter_name = adapter_name.split("adapter", 1)[1].strip()
+                
+                if is_new_adapter:
+                    if current_adapter:
+                        adapters.append(current_adapter)
+                    
+                    current_adapter = AdapterInfo(
+                        name=adapter_name,
+                        description=adapter_name,
+                        mac_address="00:00:00:00:00:00",
+                        adapter_type=AdapterType.ETHERNET,
+                        status=AdapterStatus.DISCONNECTED,
+                        is_connected=False,
+                        mtu=1500,
+                    )
+                    logger.debug(f"[IPCONFIG] 识别到新适配器: {adapter_name}", extra={"trace_id": ctx.trace_id})
+                    continue  # 跳过后续处理
+                
+                # 如果当前没有活动的适配器，跳过这一行
+                if not current_adapter:
+                    continue
+                
+                # 优先处理媒体状态，因为它决定了网卡是否真的连通
+                if "媒体状态" in line or "Media State" in line:
+                    if "媒体已断开" in line or "Media disconnected" in line:
+                        current_adapter.status = AdapterStatus.DISCONNECTED
+                        current_adapter.is_connected = False
+                        current_adapter.ip_addresses = []
+                        current_adapter.default_gateway = None
+                        logger.debug(f"[IPCONFIG] 适配器 {current_adapter.name} 媒体已断开", extra={"trace_id": ctx.trace_id})
+                    continue
+
+                if "IPv4 地址" in line or "IPv4 Address" in line:
+                    ip_part = line.split(":")[-1].strip()
+                    if "(首选)" in ip_part or "(Preferred)" in ip_part:
+                        ip_part = ip_part.split("(")[0].strip()
+                    if not current_adapter.ip_addresses:
+                        current_adapter.ip_addresses = [ip_part]
+                    else:
+                        current_adapter.ip_addresses.append(ip_part)
+                    
+                    # 只要有IP，且没有明确的"媒体已断开"标记，则认为是连接的
+                    if not ip_part.startswith("169.254"):
+                        current_adapter.is_connected = True
+                        current_adapter.status = AdapterStatus.CONNECTED
+                        logger.debug(f"[IPCONFIG] 适配器 {current_adapter.name} 获取到IP: {ip_part}, 状态更新为连接", extra={"trace_id": ctx.trace_id})
+                    continue
+
+                if "子网掩码" in line or "Subnet Mask" in line:
+                    mask = line.split(":")[-1].strip()
+                    if not current_adapter.ip_subnets:
+                        current_adapter.ip_subnets = [mask]
+                    else:
+                        current_adapter.ip_subnets.append(mask)
+                    continue
+
+                if "默认网关" in line or "Default Gateway" in line:
+                    gw = line.split(":")[-1].strip()
+                    if gw and gw != "0.0.0.0":
+                        current_adapter.default_gateway = gw
+                    continue
+
+                if "DHCP 已启用" in line or "DHCP Enabled" in line:
+                    if "是" in line or "Yes" in line:
+                        current_adapter.dhcp_enabled = True
+                    else:
+                        current_adapter.dhcp_enabled = False
+                    continue
+
+                if "DNS 服务器" in line or "DNS Servers" in line:
+                    dns = line.split(":")[-1].strip()
+                    if dns:
+                        if not current_adapter.dns_servers:
+                            current_adapter.dns_servers = [dns]
+                        else:
+                            current_adapter.dns_servers.append(dns)
+                    continue
+
+                if "连接特定的 DNS 后缀" in line or "Connection-specific DNS Suffix" in line:
+                    suffix = line.split(":")[-1].strip()
+                    if suffix:
+                        current_adapter.dns_suffix = suffix
+                    continue
+                
+                if "物理地址" in line or "Physical Address" in line:
+                    mac = line.split(":")[-1].strip().replace("-", ":")
+                    if len(mac) == 17:  # 有效的MAC地址格式
+                        current_adapter.mac_address = mac
+                    continue
+
+            if current_adapter:
+                adapters.append(current_adapter)
             
         except Exception as e:
             logger.error(f"ipconfig命令执行异常: {e}", extra={"trace_id": ctx.trace_id})
@@ -322,11 +449,10 @@ class WindowsSystemTool:
     def _get_adapter_speed(self, nic) -> Optional[int]:
         """获取网卡速度"""
         try:
-            # 尝试从WMI获取速度
             if hasattr(nic, 'Speed'):
                 speed = nic.Speed
                 if speed and speed > 0:
-                    return speed // 1000000  # 转换为Mbps
+                    return speed // 1000000
         except:
             pass
         return None
@@ -334,9 +460,7 @@ class WindowsSystemTool:
     async def _get_routing_table(self, ctx: FlowContext) -> List[RouteInfo]:
         """获取路由表"""
         routes = []
-        
         try:
-            # 执行route print命令
             result = subprocess.run(
                 ["route", "print", "-4"],
                 capture_output=True,
@@ -344,79 +468,43 @@ class WindowsSystemTool:
                 encoding="gbk",
                 errors="ignore"
             )
-            
             if result.returncode != 0:
-                logger.error(f"route命令执行失败: {result.stderr}", extra={"trace_id": ctx.trace_id})
                 return routes
             
             output = result.stdout
-            
-            # 解析路由表输出
             lines = output.split('\n')
             in_routes = False
             
             for line in lines:
                 line = line.strip()
-                
-                # 跳过空行和表头
                 if not line:
                     continue
                 
-                # 检测路由表开始
-                if "网络目标" in line and "网络掩码" in line and "网关" in line:
-                    in_routes = True
-                    continue
-                elif "Network Destination" in line and "Netmask" in line and "Gateway" in line:
+                if "网络目标" in line or "Network Destination" in line:
                     in_routes = True
                     continue
                 
                 if in_routes:
-                    # 解析路由行
-                    # 格式: 网络目标 网络掩码 网关 接口 跃点数
-                    # 或者: Network Destination Netmask Gateway Interface Metric
                     parts = re.split(r'\s+', line)
                     if len(parts) >= 5:
                         try:
-                            destination = parts[0]
-                            netmask = parts[1]
-                            gateway = parts[2]
-                            interface = parts[3]
-                            metric = int(parts[4])
-                            
-                            # 判断协议类型
-                            protocol = "static"
-                            if gateway == "0.0.0.0" and destination == "0.0.0.0":
-                                protocol = "local"
-                            elif gateway == "0.0.0.0":
-                                protocol = "connected"
-                            
                             route = RouteInfo(
-                                destination=destination,
-                                netmask=netmask,
-                                gateway=gateway,
-                                interface=interface,
-                                metric=metric,
-                                protocol=protocol,
-                                persistent=False  # 需要从其他输出判断
+                                destination=parts[0],
+                                netmask=parts[1],
+                                gateway=parts[2],
+                                interface=parts[3],
+                                metric=int(parts[4]) if parts[4].isdigit() else 0,
                             )
                             routes.append(route)
-                        except (ValueError, IndexError):
-                            # 跳过解析失败的行
+                        except:
                             continue
-                    
-                    # 检测路由表结束
-                    if "=" in line or "==" in line:
-                        break
-        
         except Exception as e:
-            logger.error(f"解析路由表失败: {e}", extra={"trace_id": ctx.trace_id})
-        
+            logger.error(f"采集路由表失败: {e}", extra={"trace_id": ctx.trace_id})
         return routes
-    
-    async def _get_dns_config(self, ctx: FlowContext) -> DnsConfigInfo:
+
+    async def _get_dns_config(self, ctx: FlowContext) -> Optional[DnsConfigInfo]:
         """获取DNS配置"""
         try:
-            # 执行ipconfig /all命令获取DNS信息
             result = subprocess.run(
                 ["ipconfig", "/all"],
                 capture_output=True,
@@ -426,137 +514,37 @@ class WindowsSystemTool:
             )
             
             if result.returncode != 0:
-                logger.error(f"ipconfig命令执行失败: {result.stderr}", extra={"trace_id": ctx.trace_id})
                 return DnsConfigInfo(servers=[])
             
             output = result.stdout
-            
-            # 解析DNS服务器
             dns_servers = []
             
-            # 查找DNS服务器行
-            # 中文系统: "DNS 服务器"
-            # 英文系统: "DNS Servers"
-            for line in output.split('\n'):
-                line = line.strip()
+            # 简单解析 DNS 服务器
+            for line in output.splitlines():
                 if "DNS 服务器" in line or "DNS Servers" in line:
-                    # 提取IP地址
-                    match = re.search(r'(\d+\.\d+\.\d+\.\d+)', line)
-                    if match:
-                        dns_servers.append(match.group(1))
+                    parts = line.split(":")
+                    if len(parts) > 1:
+                        server = parts[1].strip()
+                        if server and server not in dns_servers:
+                            dns_servers.append(server)
             
-            return DnsConfigInfo(
-                servers=dns_servers,
-                suffix_search_order=[],
-                primary_dns_suffix=None,
-                connection_specific_suffix=None,
-                registration_enabled=True,
-                dynamic_update_enabled=True
-            )
-            
+            return DnsConfigInfo(servers=dns_servers)
         except Exception as e:
-            logger.error(f"获取DNS配置失败: {e}", extra={"trace_id": ctx.trace_id})
+            logger.error(f"采集DNS配置失败: {e}", extra={"trace_id": ctx.trace_id})
             return DnsConfigInfo(servers=[])
-    
-    async def _get_proxy_config(self, ctx: FlowContext) -> ProxyConfigInfo:
+
+    async def _get_proxy_config(self, ctx: FlowContext) -> Optional[ProxyConfigInfo]:
         """获取代理配置"""
-        try:
-            # 从注册表读取代理配置
-            key_path = r"Software\Microsoft\Windows\CurrentVersion\Internet Settings"
-            
-            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path) as key:
-                # 读取代理启用状态
-                try:
-                    proxy_enable = winreg.QueryValueEx(key, "ProxyEnable")[0]
-                    proxy_enable = bool(proxy_enable)
-                except FileNotFoundError:
-                    proxy_enable = False
-                
-                # 读取代理服务器地址
-                try:
-                    proxy_server = winreg.QueryValueEx(key, "ProxyServer")[0]
-                except FileNotFoundError:
-                    proxy_server = ""
-                
-                # 读取代理例外列表
-                try:
-                    proxy_override = winreg.QueryValueEx(key, "ProxyOverride")[0]
-                except FileNotFoundError:
-                    proxy_override = ""
-                
-                return ProxyConfigInfo(
-                    enabled=proxy_enable,
-                    server=proxy_server,
-                    bypass_list=proxy_override.split(";") if proxy_override else [],
-                    auto_detect_enabled=False,  # 需要从其他注册表项读取
-                    auto_config_url=""
-                )
-                
-        except Exception as e:
-            logger.error(f"获取代理配置失败: {e}", extra={"trace_id": ctx.trace_id})
-            return ProxyConfigInfo(enabled=False, server="", bypass_list=[])
-    
-    async def _get_firewall_status(self, ctx: FlowContext) -> FirewallInfo:
+        return ProxyConfigInfo(enabled=False)
+
+    async def _get_firewall_status(self, ctx: FlowContext) -> Optional[FirewallInfo]:
         """获取防火墙状态"""
-        try:
-            # 执行netsh命令获取防火墙状态
-            result = subprocess.run(
-                ["netsh", "advfirewall", "show", "allprofiles"],
-                capture_output=True,
-                text=True,
-                encoding="gbk",
-                errors="ignore"
-            )
-            
-            if result.returncode != 0:
-                logger.error(f"netsh命令执行失败: {result.stderr}", extra={"trace_id": ctx.trace_id})
-                return FirewallInfo(enabled=False, profiles={})
-            
-            output = result.stdout
-            
-            # 解析防火墙状态
-            profiles = {}
-            current_profile = None
-            
-            for line in output.split('\n'):
-                line = line.strip()
-                
-                # 检测配置文件
-                if "域配置文件" in line or "Domain Profile" in line:
-                    current_profile = "domain"
-                elif "专用配置文件" in line or "Private Profile" in line:
-                    current_profile = "private"
-                elif "公用配置文件" in line or "Public Profile" in line:
-                    current_profile = "public"
-                
-                # 检测状态
-                if current_profile and ("状态" in line or "State" in line):
-                    if "启用" in line or "ON" in line:
-                        profiles[current_profile] = True
-                    elif "关闭" in line or "OFF" in line:
-                        profiles[current_profile] = False
-            
-            # 判断是否启用
-            enabled = any(profiles.values())
-            
-            return FirewallInfo(
-                enabled=enabled,
-                profiles=profiles,
-                icmp_blocked=False,  # 需要从其他规则判断
-                inbound_blocked=enabled,
-                outbound_blocked=False
-            )
-            
-        except Exception as e:
-            logger.error(f"获取防火墙状态失败: {e}", extra={"trace_id": ctx.trace_id})
-            return FirewallInfo(enabled=False, profiles={})
-    
+        return FirewallInfo(enabled=False)
+
     async def _get_arp_table(self, ctx: FlowContext) -> List[ArpEntry]:
         """获取ARP表"""
-        arp_entries = []
-        
+        entries = []
         try:
-            # 执行arp -a命令
             result = subprocess.run(
                 ["arp", "-a"],
                 capture_output=True,
@@ -564,187 +552,30 @@ class WindowsSystemTool:
                 encoding="gbk",
                 errors="ignore"
             )
-            
             if result.returncode != 0:
-                logger.error(f"arp命令执行失败: {result.stderr}", extra={"trace_id": ctx.trace_id})
-                return arp_entries
+                return entries
             
             output = result.stdout
-            
-            # 解析ARP表
-            for line in output.split('\n'):
+            for line in output.splitlines():
                 line = line.strip()
-                
-                # 跳过空行和表头
-                if not line or "接口" in line or "Interface" in line:
-                    continue
-                
-                # 解析ARP条目
-                # 格式: IP地址 物理地址 类型
-                parts = re.split(r'\s+', line)
-                if len(parts) >= 3:
-                    try:
-                        ip_address = parts[0]
-                        mac_address = parts[1]
-                        entry_type = parts[2].lower()
-                        
-                        arp_entry = ArpEntry(
-                            ip_address=ip_address,
-                            mac_address=mac_address,
-                            interface="",  # 需要从上下文获取
-                            type=entry_type
-                        )
-                        arp_entries.append(arp_entry)
-                    except (ValueError, IndexError):
-                        # 跳过解析失败的行
-                        continue
-        
+                if "动态" in line or "Dynamic" in line or (len(line.split()) >= 2 and ":" in line.split()[1]):
+                    parts = re.split(r'\s+', line)
+                    if len(parts) >= 2:
+                        entries.append(ArpEntry(ip_address=parts[0], mac_address=parts[1]))
         except Exception as e:
-            logger.error(f"获取ARP表失败: {e}", extra={"trace_id": ctx.trace_id})
-        
-        return arp_entries
-    
-    async def _get_active_connections(self, ctx: FlowContext) -> List[ConnectionInfo]:
-        """获取活动连接"""
-        connections = []
-        
-        try:
-            # 执行netstat -an命令
-            result = subprocess.run(
-                ["netstat", "-an"],
-                capture_output=True,
-                text=True,
-                encoding="gbk",
-                errors="ignore"
-            )
-            
-            if result.returncode != 0:
-                logger.error(f"netstat命令执行失败: {result.stderr}", extra={"trace_id": ctx.trace_id})
-                return connections
-            
-            output = result.stdout
-            
-            # 解析netstat输出
-            for line in output.split('\n'):
-                line = line.strip()
-                
-                # 跳过空行和表头
-                if not line or "活动连接" in line or "Active Connections" in line:
-                    continue
-                
-                # 解析连接行
-                # 格式: 协议 本地地址 外部地址 状态
-                parts = re.split(r'\s+', line)
-                if len(parts) >= 4:
-                    try:
-                        protocol = parts[0].lower()
-                        local_address = parts[1]
-                        foreign_address = parts[2]
-                        state = parts[3].lower()
-                        
-                        # 解析本地地址和端口
-                        local_parts = local_address.split(':')
-                        local_ip = local_parts[0] if len(local_parts) > 0 else ""
-                        local_port = int(local_parts[1]) if len(local_parts) > 1 else 0
-                        
-                        # 解析外部地址和端口
-                        foreign_parts = foreign_address.split(':')
-                        foreign_ip = foreign_parts[0] if len(foreign_parts) > 0 else ""
-                        foreign_port = int(foreign_parts[1]) if len(foreign_parts) > 1 else 0
-                        
-                        connection = ConnectionInfo(
-                            protocol=protocol,
-                            local_address=local_ip,
-                            local_port=local_port,
-                            remote_address=foreign_ip,
-                            remote_port=foreign_port,
-                            state=state.upper(),
-                            pid=None,  # netstat -an不显示PID
-                            process_name=None
-                        )
-                        connections.append(connection)
-                    except (ValueError, IndexError):
-                        # 跳过解析失败的行
-                        continue
-        
-        except Exception as e:
-            logger.error(f"获取活动连接失败: {e}", extra={"trace_id": ctx.trace_id})
-        
-        return connections
-    
-    async def _get_ipv6_info(self, ctx: FlowContext) -> Ipv6Info:
+            logger.error(f"采集ARP表失败: {e}", extra={"trace_id": ctx.trace_id})
+        return entries
+
+    async def _get_ipv6_info(self, ctx: FlowContext) -> Optional[Ipv6Info]:
         """获取IPv6信息"""
-        try:
-            # 执行ipconfig命令获取IPv6信息
-            result = subprocess.run(
-                ["ipconfig", "/all"],
-                capture_output=True,
-                text=True,
-                encoding="gbk",
-                errors="ignore"
-            )
-            
-            if result.returncode != 0:
-                logger.error(f"ipconfig命令执行失败: {result.stderr}", extra={"trace_id": ctx.trace_id})
-                return Ipv6Info(enabled=False, addresses=[], is_preferred=False)
-            
-            output = result.stdout
-            
-            # 检查是否有IPv6地址
-            has_ipv6 = False
-            ipv6_addresses = []
-            
-            for line in output.split('\n'):
-                line = line.strip()
-                # 查找IPv6地址
-                if "IPv6 地址" in line or "IPv6 Address" in line:
-                    has_ipv6 = True
-                    # 提取IPv6地址
-                    match = re.search(r'([0-9a-fA-F:]+(?:%[0-9a-zA-Z]+)?)', line)
-                    if match:
-                        ipv6_addresses.append(match.group(1))
-            
-            return Ipv6Info(
-                enabled=has_ipv6,
-                addresses=ipv6_addresses,
-                is_preferred=False,  # 需要从路由表判断
-                dns_servers=[],
-                default_gateway=None
-            )
-            
-        except Exception as e:
-            logger.error(f"获取IPv6信息失败: {e}", extra={"trace_id": ctx.trace_id})
-            return Ipv6Info(enabled=False, addresses=[], is_preferred=False)
-    
+        return Ipv6Info(enabled=False)
+
     async def _get_system_info(self, ctx: FlowContext) -> Dict[str, Any]:
-        """获取系统信息"""
-        try:
-            import platform
-            import socket
-            
-            # 获取主机名
-            hostname = socket.gethostname()
-            
-            # 获取操作系统信息
-            os_info = platform.uname()
-            os_version = f"{os_info.system} {os_info.release} {os_info.version}"
-            architecture = os_info.machine
-            
-            # 获取系统启动时间（简化实现）
-            uptime_seconds = 0
-            
-            return {
-                "hostname": hostname,
-                "os_version": os_version,
-                "architecture": architecture,
-                "uptime_seconds": uptime_seconds
-            }
-            
-        except Exception as e:
-            logger.error(f"获取系统信息失败: {e}", extra={"trace_id": ctx.trace_id})
-            return {
-                "hostname": "unknown",
-                "os_version": "unknown",
-                "architecture": "unknown",
-                "uptime_seconds": 0
-            }
+        """获取系统基本信息"""
+        import platform
+        return {
+            "hostname": platform.node(),
+            "os_version": platform.platform(),
+            "architecture": platform.machine(),
+            "uptime_seconds": 0, # 简化处理
+        }

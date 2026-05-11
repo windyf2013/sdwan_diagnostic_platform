@@ -1,0 +1,273 @@
+{
+  "version": "1.0",
+  "description": "智能路径分析器测试用例集合",
+  "test_cases": [
+    {
+      "name": "传统网关部署-有Hostname和AS号",
+      "description": "PC → Switch → CPE → ISP Router → Internet",
+      "hops": [
+        {
+          "hop_number": 1,
+          "ip_addresses": ["192.168.1.100"],
+          "hostnames": [],
+          "rtts": [1.0, 1.0, 2.0],
+          "is_timeout": false
+        },
+        {
+          "hop_number": 2,
+          "ip_addresses": ["192.168.1.1"],
+          "hostnames": ["gateway.local"],
+          "rtts": [2.0, 2.0, 3.0],
+          "is_timeout": false
+        },
+        {
+          "hop_number": 3,
+          "ip_addresses": ["10.164.176.1"],
+          "hostnames": ["cpe-router.isp.com"],
+          "rtts": [5.0, 5.0, 6.0],
+          "is_timeout": false,
+          "as_number": "64512",
+          "country": null,
+          "isp": null
+        },
+        {
+          "hop_number": 4,
+          "ip_addresses": ["221.183.49.134"],
+          "hostnames": [],
+          "rtts": [25.0, 27.0, 24.0],
+          "is_timeout": false,
+          "as_number": "4837",
+          "country": "CN",
+          "isp": "China Unicom"
+        },
+        {
+          "hop_number": 5,
+          "ip_addresses": ["202.97.1.1"],
+          "hostnames": [],
+          "rtts": [30.0, 32.0, 28.0],
+          "is_timeout": false,
+          "as_number": "4134",
+          "country": "CN",
+          "isp": "China Telecom"
+        }
+      ],
+      "expected_cpe_hop": 3,
+      "expected_deployment_mode": "gateway",
+      "notes": "CPE在第3跳，有Hostname匹配(cpe-router)和AS号变更(64512→4837)双重证据"
+    },
+    {
+      "name": "PC侧分流-虚拟网卡",
+      "description": "PC → 虚拟网卡(OpenVPN/WireGuard) → Internet",
+      "hops": [
+        {
+          "hop_number": 1,
+          "ip_addresses": ["10.8.0.1"],
+          "hostnames": ["vpn-gateway.local"],
+          "rtts": [1.0, 1.0, 1.0],
+          "is_timeout": false
+        },
+        {
+          "hop_number": 2,
+          "ip_addresses": ["203.0.113.1"],
+          "hostnames": [],
+          "rtts": [20.0, 22.0, 18.0],
+          "is_timeout": false,
+          "as_number": "4134",
+          "country": "CN",
+          "isp": "China Telecom"
+        },
+        {
+          "hop_number": 3,
+          "ip_addresses": ["198.51.100.1"],
+          "hostnames": [],
+          "rtts": [25.0, 27.0, 23.0],
+          "is_timeout": false
+        }
+      ],
+      "expected_cpe_hop": 1,
+      "expected_deployment_mode": "pc_side",
+      "notes": "CPE在第1跳（虚拟网卡），私网直接到公网，RTT从1ms突增到20ms"
+    },
+    {
+      "name": "运营商级部署-多层私网",
+      "description": "PC → Access Switch → Aggregation Router → BRAS → SD-WAN Gateway → Internet",
+      "hops": [
+        {
+          "hop_number": 1,
+          "ip_addresses": ["192.168.1.100"],
+          "hostnames": [],
+          "rtts": [1.0, 1.0, 1.0],
+          "is_timeout": false
+        },
+        {
+          "hop_number": 2,
+          "ip_addresses": ["10.1.1.1"],
+          "hostnames": [],
+          "rtts": [2.0, 2.0, 2.0],
+          "is_timeout": false
+        },
+        {
+          "hop_number": 3,
+          "ip_addresses": ["10.2.2.2"],
+          "hostnames": [],
+          "rtts": [3.0, 3.0, 3.0],
+          "is_timeout": false
+        },
+        {
+          "hop_number": 4,
+          "ip_addresses": ["10.3.3.3"],
+          "hostnames": [],
+          "rtts": [4.0, 4.0, 4.0],
+          "is_timeout": false
+        },
+        {
+          "hop_number": 5,
+          "ip_addresses": ["172.16.0.1"],
+          "hostnames": ["sdwan-gateway.operator.com"],
+          "rtts": [5.0, 5.0, 5.0],
+          "is_timeout": false
+        },
+        {
+          "hop_number": 6,
+          "ip_addresses": ["203.0.113.1"],
+          "hostnames": [],
+          "rtts": [30.0, 32.0, 28.0],
+          "is_timeout": false,
+          "as_number": "4134",
+          "country": "CN",
+          "isp": "China Telecom"
+        }
+      ],
+      "expected_cpe_hop": 5,
+      "expected_deployment_mode": "upstream",
+      "notes": "CPE在第5跳，前面有4个私网跳点，Hostname包含'sdwan-gateway'"
+    },
+    {
+      "name": "无Hostname仅AS号变更",
+      "description": "依赖AS号变更识别网络边界",
+      "hops": [
+        {
+          "hop_number": 1,
+          "ip_addresses": ["192.168.1.100"],
+          "hostnames": [],
+          "rtts": [1.0, 1.0, 2.0],
+          "is_timeout": false
+        },
+        {
+          "hop_number": 2,
+          "ip_addresses": ["192.168.1.1"],
+          "hostnames": [],
+          "rtts": [2.0, 2.0, 3.0],
+          "is_timeout": false
+        },
+        {
+          "hop_number": 3,
+          "ip_addresses": ["10.164.176.1"],
+          "hostnames": [],
+          "rtts": [5.0, 5.0, 6.0],
+          "is_timeout": false,
+          "as_number": "64512",
+          "country": null,
+          "isp": null
+        },
+        {
+          "hop_number": 4,
+          "ip_addresses": ["221.183.49.134"],
+          "hostnames": [],
+          "rtts": [25.0, 27.0, 24.0],
+          "is_timeout": false,
+          "as_number": "4837",
+          "country": "CN",
+          "isp": "China Unicom"
+        }
+      ],
+      "expected_cpe_hop": 3,
+      "expected_deployment_mode": "gateway",
+      "notes": "无Hostname，但AS号从64512变更为4837，这是强证据"
+    },
+    {
+      "name": "仅RTT突变无其他证据",
+      "description": "仅有RTT突变的弱证据场景",
+      "hops": [
+        {
+          "hop_number": 1,
+          "ip_addresses": ["192.168.1.100"],
+          "hostnames": [],
+          "rtts": [1.0, 1.0, 2.0],
+          "is_timeout": false
+        },
+        {
+          "hop_number": 2,
+          "ip_addresses": ["192.168.1.1"],
+          "hostnames": [],
+          "rtts": [2.0, 2.0, 3.0],
+          "is_timeout": false
+        },
+        {
+          "hop_number": 3,
+          "ip_addresses": ["221.183.49.134"],
+          "hostnames": [],
+          "rtts": [25.0, 27.0, 24.0],
+          "is_timeout": false
+        }
+      ],
+      "expected_cpe_hop": 2,
+      "expected_deployment_mode": "gateway",
+      "notes": "仅RTT从2ms突增到25ms，置信度较低"
+    },
+    {
+      "name": "Windows Tracert跳过超时跳点",
+      "description": "测试补全缺失跳点后的分析",
+      "hops": [
+        {
+          "hop_number": 1,
+          "ip_addresses": ["192.168.1.1"],
+          "hostnames": [],
+          "rtts": [1.0, 1.0, 2.0],
+          "is_timeout": false
+        },
+        {
+          "hop_number": 2,
+          "ip_addresses": ["10.164.176.1"],
+          "hostnames": [],
+          "rtts": [4.0, 4.0, 5.0],
+          "is_timeout": false
+        },
+        {
+          "hop_number": 3,
+          "ip_addresses": [],
+          "hostnames": [],
+          "rtts": [],
+          "is_timeout": true
+        },
+        {
+          "hop_number": 4,
+          "ip_addresses": [],
+          "hostnames": [],
+          "rtts": [],
+          "is_timeout": true
+        },
+        {
+          "hop_number": 5,
+          "ip_addresses": [],
+          "hostnames": [],
+          "rtts": [],
+          "is_timeout": true
+        },
+        {
+          "hop_number": 6,
+          "ip_addresses": ["221.183.49.134"],
+          "hostnames": [],
+          "rtts": [26.0, 27.0, 24.0],
+          "is_timeout": false,
+          "as_number": "4837",
+          "country": "CN",
+          "isp": "China Unicom"
+        }
+      ],
+      "expected_cpe_hop": 2,
+      "expected_deployment_mode": "gateway",
+      "notes": "3、4、5跳超时被补全，CPE在第2跳，第6跳有AS号"
+    }
+  ]
+}

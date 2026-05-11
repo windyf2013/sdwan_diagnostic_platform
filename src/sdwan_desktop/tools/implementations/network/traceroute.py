@@ -9,6 +9,7 @@ import asyncio
 import logging
 import re
 import ipaddress
+import socket
 from typing import Any, Dict, List, Optional
 
 from sdwan_desktop.core.types.tool import ToolRequest, ToolResponse
@@ -200,7 +201,7 @@ class TraceRouteTool:
         Args:
             host: 目标主机
             max_hops: 最大跳数
-            timeout: 超时时间(秒)
+            timeout: 超时时间(秒) - 这是每次探测的超时时间
             protocol: 协议类型
             
         Returns:
@@ -208,30 +209,52 @@ class TraceRouteTool:
         """
         # 构建traceroute命令
         if self._is_windows:
-            # Windows使用tracert
-            cmd = ["tracert", "-h", str(max_hops), "-w", str(timeout * 1000), host]
+            # Windows使用tracert，-d 参数禁用反向DNS解析以缩短每跳查询时间
+            # -w 参数指定每次探测的超时时间（毫秒），每跳自动进行3次探测
+            cmd = ["tracert", "-d", "-h", str(max_hops), "-w", str(timeout * 1000), host]
         else:
             # Linux使用traceroute
+            # -w 参数也是每次探测的超时时间（秒），默认每跳3次探测
             if protocol == "icmp":
-                cmd = ["traceroute", "-I", "-m", str(max_hops), "-w", str(timeout), host]
+                cmd = ["traceroute", "-I", "-n", "-m", str(max_hops), "-w", str(timeout), host]
             elif protocol == "udp":
-                cmd = ["traceroute", "-m", str(max_hops), "-w", str(timeout), host]
+                cmd = ["traceroute", "-n", "-m", str(max_hops), "-w", str(timeout), host]
             elif protocol == "tcp":
-                cmd = ["traceroute", "-T", "-m", str(max_hops), "-w", str(timeout), host]
+                cmd = ["traceroute", "-T", "-n", "-m", str(max_hops), "-w", str(timeout), host]
             else:
-                cmd = ["traceroute", "-m", str(max_hops), "-w", str(timeout), host]
+                cmd = ["traceroute", "-n", "-m", str(max_hops), "-w", str(timeout), host]
         
-        # 执行命令
+        # ✅ 创建子进程执行命令
         process = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
         )
         
+        # 执行命令
         try:
+            # ✅ 正确的超时计算公式（基于2026-05-02修复记录）
+            # 
+            # Windows tracert / Linux traceroute 的 -w 参数含义：
+            #   - 指定每次探测的超时时间（不是每跳总超时）
+            #   - 每跳默认进行3次探测
+            #   - 例如：-w 5000 表示每次探测最多等待5秒，每跳最多3×5=15秒
+            #
+            # 因此总超时 = max_hops × 3次探测 × timeout_per_probe + 缓冲
+            # 示例：7跳 × 3次 × 5秒 + 15秒缓冲 = 120秒
+            
+            probes_per_hop = 3  # 标准配置：每跳3次探测
+            internal_timeout = max_hops * probes_per_hop * timeout + 15  # 7×3×5+15=120秒
+            
+            logger.debug(
+                f"Traceroute内部超时配置: max_hops={max_hops}, probes_per_hop={probes_per_hop}, "
+                f"timeout_per_probe={timeout}s, internal_timeout={internal_timeout}s (公式: {max_hops}×{probes_per_hop}×{timeout}+15)",
+                extra={"trace_id": getattr(self, '_current_trace_id', 'N/A')}
+            )
+            
             stdout, stderr = await asyncio.wait_for(
                 process.communicate(),
-                timeout=timeout * max_hops + 10  # 每跳超时+额外缓冲
+                timeout=internal_timeout
             )
             
             if process.returncode != 0:
@@ -243,6 +266,15 @@ class TraceRouteTool:
             # 解析输出
             output = stdout.decode('utf-8', errors='ignore')
             hops = self._parse_traceroute_output(output, self._is_windows)
+            
+            # ✅ 关键修复：为每个跳点查询IP地理位置信息(AS号、国家、运营商)
+            hops = await self._enrich_hops_with_geo_info(hops)
+            
+            # ✅ 关键修复：补全缺失的跳点（处理Windows tracert跳过超时跳点的情况）
+            # 注意：只补全到实际解析出的最大跳数，而不是max_hops
+            if self._is_windows and hops:
+                max_parsed_hop = max(h["hop"] for h in hops)
+                hops = self._fill_missing_hops(hops, max_parsed_hop)
             
             # 限制最大跳数
             if len(hops) > max_hops:
@@ -257,7 +289,11 @@ class TraceRouteTool:
                 await asyncio.sleep(0.5)
                 if process.returncode is None:
                     process.kill()
-            except:
+                try:
+                    await process.wait()
+                except Exception:
+                    pass
+            except Exception:
                 pass
             raise
     
@@ -266,35 +302,72 @@ class TraceRouteTool:
         output: str, 
         is_windows: bool
     ) -> List[Dict[str, Any]]:
-        """解析traceroute命令输出
+        """解析traceroute/tracert命令输出
         
         Args:
-            output: traceroute命令输出文本
+            output: 命令输出
             is_windows: 是否为Windows系统
             
         Returns:
             路由跳列表
         """
         hops = []
+        lines = output.strip().split('\n')
         
-        if is_windows:
-            # Windows tracert输出解析
-            # 示例: "  1     1 ms     1 ms     1 ms  192.168.1.1"
-            # 超时: "  3     *        *        *     Request timed out."
-            pattern = r"^\s*(\d+)\s+([\d*<]+)\s+ms\s+([\d*<]+)\s+ms\s+([\d*<]+)\s+ms\s+(.+)"
-            timeout_pattern = r"^\s*(\d+)\s+\*\s+\*\s+\*\s+Request timed out"
+        # ✅ 修复：增强正则表达式，支持多种格式
+        # Windows格式1: "  1     1 ms     1 ms     1 ms  192.168.1.1"
+        # Windows格式2: "  3     *        *        *     Request timed out."
+        # Linux格式1: " 1  192.168.1.1 (192.168.1.1)  1.234 ms  1.345 ms  1.456 ms"
+        # Linux格式2: " 3  * * *"
+        hop_pattern_windows_with_ip = re.compile(
+            r'^\s*(\d+)\s+(\d+(?:\.\d+)?)\s+ms\s+(\d+(?:\.\d+)?)\s+ms\s+(\d+(?:\.\d+)?)\s+ms\s+([\d.]+)'
+        )
+        hop_pattern_windows_timeout = re.compile(
+            r'^\s*(\d+)\s+\*\s+\*\s+\*\s+(?:Request timed out\.|请求超时\.?)'
+        )
+        hop_pattern_linux_with_ip = re.compile(
+            r'^\s*(\d+)\s+([\d.*]+)(?:\s+\(([\d.*]+)\))?\s+([\d.]+)\s+ms\s+([\d.]+)\s+ms\s+([\d.]+)\s+ms'
+        )
+        hop_pattern_linux_timeout = re.compile(
+            r'^\s*(\d+)\s+\*\s+\*\s+\*'
+        )
+        
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
             
-            for line in output.split('\n'):
-                line = line.strip()
-                if not line:
+            matched = False
+            
+            if is_windows:
+                # 尝试匹配Windows格式（带IP）
+                match = hop_pattern_windows_with_ip.match(line)
+                if match:
+                    hop = int(match.group(1))
+                    rtt1 = float(match.group(2))
+                    rtt2 = float(match.group(3))
+                    rtt3 = float(match.group(4))
+                    ip = match.group(5)
+                    
+                    hops.append({
+                        "hop": hop,
+                        "ip": ip,
+                        "hostname": None,
+                        "rtts": [rtt1, rtt2, rtt3],
+                        "rtt_min": min(rtt1, rtt2, rtt3),
+                        "rtt_avg": (rtt1 + rtt2 + rtt3) / 3,
+                        "rtt_max": max(rtt1, rtt2, rtt3),
+                        "loss_rate": 0.0,
+                    })
+                    matched = True
                     continue
                 
-                # 先检查是否为超时行（所有RTT都是*）
-                timeout_match = re.match(timeout_pattern, line)
-                if timeout_match:
-                    hop_num = int(timeout_match.group(1))
-                    hop = {
-                        "hop": hop_num,
+                # 尝试匹配Windows格式（超时）
+                match = hop_pattern_windows_timeout.match(line)
+                if match:
+                    hop = int(match.group(1))
+                    hops.append({
+                        "hop": hop,
                         "ip": "*",
                         "hostname": None,
                         "rtts": [],
@@ -302,154 +375,175 @@ class TraceRouteTool:
                         "rtt_avg": None,
                         "rtt_max": None,
                         "loss_rate": 1.0,
-                    }
-                    hops.append(hop)
+                    })
+                    matched = True
+                    continue
+            else:
+                # Linux格式
+                # 先尝试匹配超时格式
+                match = hop_pattern_linux_timeout.match(line)
+                if match:
+                    hop = int(match.group(1))
+                    hops.append({
+                        "hop": hop,
+                        "ip": "*",
+                        "hostname": None,
+                        "rtts": [],
+                        "rtt_min": None,
+                        "rtt_avg": None,
+                        "rtt_max": None,
+                        "loss_rate": 1.0,
+                    })
+                    matched = True
                     continue
                 
-                match = re.match(pattern, line)
+                # 再尝试匹配带IP的格式
+                match = hop_pattern_linux_with_ip.match(line)
                 if match:
-                    hop_num = int(match.group(1))
-                    rtt1 = self._parse_rtt(match.group(2))
-                    rtt2 = self._parse_rtt(match.group(3))
-                    rtt3 = self._parse_rtt(match.group(4))
-                    target = match.group(5)
+                    hop = int(match.group(1))
+                    ip_or_hostname = match.group(2)
+                    ip_in_paren = match.group(3)  # 括号内的IP
+                    rtt1 = float(match.group(4))
+                    rtt2 = float(match.group(5))
+                    rtt3 = float(match.group(6))
                     
-                    # 解析IP和主机名
-                    ip, hostname = self._parse_target(target)
+                    # 确定IP地址
+                    ip = ip_in_paren if ip_in_paren and ip_in_paren != '*' else ip_or_hostname
                     
-                    # 计算统计
-                    rtts = [rtt for rtt in [rtt1, rtt2, rtt3] if rtt is not None]
-                    stats = self._calculate_hop_stats(rtts)
-                    
-                    hop = {
-                        "hop": hop_num,
-                        "ip": ip,
-                        "hostname": hostname,
-                        "rtts": rtts,
-                        **stats,
-                    }
-                    hops.append(hop)
-        else:
-            # Linux traceroute输出解析
-            # 示例: " 1  192.168.1.1 (192.168.1.1)  1.234 ms  1.345 ms  1.456 ms"
-            pattern = r"^\s*(\d+)\s+([^\s]+)\s+\(([^)]+)\)\s+([\d.*]+)\s+ms\s+([\d.*]+)\s+ms\s+([\d.*]+)\s+ms"
+                    # 如果IP是*，表示超时
+                    if ip == '*':
+                        hops.append({
+                            "hop": hop,
+                            "ip": "*",
+                            "hostname": None,
+                            "rtts": [],
+                            "rtt_min": None,
+                            "rtt_avg": None,
+                            "rtt_max": None,
+                            "loss_rate": 1.0,
+                        })
+                    else:
+                        hostname = ip_or_hostname if ip_or_hostname != ip else None
+                        hops.append({
+                            "hop": hop,
+                            "ip": ip,
+                            "hostname": hostname,
+                            "rtts": [rtt1, rtt2, rtt3],
+                            "rtt_min": min(rtt1, rtt2, rtt3),
+                            "rtt_avg": (rtt1 + rtt2 + rtt3) / 3,
+                            "rtt_max": max(rtt1, rtt2, rtt3),
+                            "loss_rate": 0.0,
+                        })
+                    matched = True
+                    continue
             
-            for line in output.split('\n'):
-                line = line.strip()
-                if not line or line.startswith("traceroute"):
-                    continue
-                
-                match = re.match(pattern, line)
-                if match:
-                    hop_num = int(match.group(1))
-                    hostname = match.group(2)
-                    ip = match.group(3)
-                    rtt1 = self._parse_rtt(match.group(4))
-                    rtt2 = self._parse_rtt(match.group(5))
-                    rtt3 = self._parse_rtt(match.group(6))
-                    
-                    # 计算统计
-                    rtts = [rtt for rtt in [rtt1, rtt2, rtt3] if rtt is not None]
-                    stats = self._calculate_hop_stats(rtts)
-                    
-                    hop = {
-                        "hop": hop_num,
-                        "ip": ip,
-                        "hostname": hostname if hostname != ip else None,
-                        "rtts": rtts,
-                        **stats,
-                    }
-                    hops.append(hop)
+            if not matched:
+                logger.debug(f"Traceroute行无法解析: {line}", extra={"trace_id": getattr(self, '_current_trace_id', 'N/A')})
         
         return hops
     
-    def _parse_rtt(self, rtt_str: str) -> Optional[float]:
-        """解析RTT字符串
+    def _fill_missing_hops(
+        self, 
+        hops: List[Dict[str, Any]], 
+        max_hops: int
+    ) -> List[Dict[str, Any]]:
+        """补全缺失的跳点
         
         Args:
-            rtt_str: RTT字符串，如 "1.234" 或 "*"
+            hops: 当前解析出的路由跳列表
+            max_hops: 最大跳数
             
         Returns:
-            RTT值(ms)，解析失败返回None
+            补全后的路由跳列表
         """
-        if not rtt_str or rtt_str == "*":
-            return None
+        filled_hops = []
+        last_hop = 0
         
-        try:
-            return float(rtt_str)
-        except ValueError:
-            return None
-    
-    def _parse_target(self, target: str) -> tuple:
-        """解析目标字符串，提取IP和主机名
+        for hop in hops:
+            while last_hop < hop["hop"] - 1:
+                last_hop += 1
+                filled_hops.append({
+                    "hop": last_hop,
+                    "ip": "*",
+                    "rtts": [],
+                    "rtt_min": None,
+                    "rtt_avg": None,
+                    "rtt_max": None,
+                    "loss_rate": 1.0,
+                })
+            filled_hops.append(hop)
+            last_hop = hop["hop"]
         
-        Args:
-            target: 目标字符串，如 "192.168.1.1" 或 "router.local [192.168.1.1]"
-            
-        Returns:
-            (ip, hostname) 元组
-        """
-        # 检查是否为IP地址
-        try:
-            ipaddress.ip_address(target)
-            return target, None
-        except ValueError:
-            pass
-        
-        # 尝试从格式 "hostname [ip]" 中提取
-        match = re.match(r"([^\s]+)\s+\[([^\]]+)\]", target)
-        if match:
-            hostname = match.group(1)
-            ip = match.group(2)
-            return ip, hostname
-        
-        # 其他情况
-        return None, target
-    
-    def _calculate_hop_stats(self, rtts: List[float]) -> Dict[str, Any]:
-        """计算单跳的统计信息
-        
-        Args:
-            rtts: RTT值列表
-            
-        Returns:
-            统计信息字典
-        """
-        if not rtts:
-            return {
+        while last_hop < max_hops:
+            last_hop += 1
+            filled_hops.append({
+                "hop": last_hop,
+                "ip": "*",
+                "rtts": [],
                 "rtt_min": None,
                 "rtt_avg": None,
                 "rtt_max": None,
                 "loss_rate": 1.0,
-            }
+            })
         
-        # 计算RTT统计
-        rtt_min = min(rtts)
-        rtt_max = max(rtts)
-        rtt_avg = sum(rtts) / len(rtts)
-        
-        # 计算丢包率（假设每个跳探测3次）
-        total_probes = 3
-        loss_rate = (total_probes - len(rtts)) / total_probes
-        
-        return {
-            "rtt_min": rtt_min,
-            "rtt_avg": rtt_avg,
-            "rtt_max": rtt_max,
-            "loss_rate": loss_rate,
-        }
+        return filled_hops
     
-    def _resolve_hostname(self, hostname: str) -> Optional[str]:
-        """解析主机名获取IP地址
+    async def _enrich_hops_with_geo_info(self, hops: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """为每个跳点查询IP地理位置信息(AS号、国家、运营商)
         
         Args:
-            hostname: 主机名
+            hops: 路由跳列表
             
         Returns:
-            IP地址，解析失败返回None
+            填充了地理位置信息的跳点列表
         """
         try:
-            import socket
-            return socket.gethostbyname(hostname)
-        except:
-            return None
+            # 导入IP地理位置服务
+            from sdwan_desktop.services.ip_geo_service import get_ip_geo_service
+            
+            geo_service = get_ip_geo_service()
+            
+            for hop in hops:
+                # 跳过超时或无效IP
+                ip = hop.get("ip")
+                if not ip or ip in ["*", "T", "?"]:
+                    continue
+                
+                # 查询IP地理信息
+                geo_info = geo_service.query_ip(ip)
+                
+                if geo_info:
+                    # 填充到hop对象
+                    hop["as_number"] = geo_info.get("as_number")
+                    hop["country"] = geo_info.get("country")
+                    hop["isp"] = geo_info.get("isp")
+                    
+                    logger.debug(
+                        f"第{hop['hop']}跳 {ip}: "
+                        f"AS{hop.get('as_number', 'N/A')}, "
+                        f"{hop.get('country', 'N/A')}, "
+                        f"{hop.get('isp', 'N/A')}"
+                    )
+        except ImportError:
+            logger.warning("IPGeoService未安装,跳过ASN信息查询")
+        except Exception as e:
+            logger.warning(f"查询IP地理位置失败: {e}")
+        
+        return hops
+    
+    def _resolve_hostname(self, host: str) -> Optional[str]:
+        """解析主机名
+        
+        Args:
+            host: 主机名或IP地址
+            
+        Returns:
+            IP地址
+        """
+        try:
+            return str(ipaddress.ip_address(host))
+        except ValueError:
+            try:
+                return str(ipaddress.ip_address(socket.gethostbyname(host)))
+            except Exception:
+                return None

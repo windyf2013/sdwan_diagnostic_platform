@@ -90,14 +90,13 @@ Approximate round trip times in milli-seconds:
     @pytest.mark.asyncio
     async def test_ping_timeout(self):
         """测试Ping超时"""
-        request = ToolRequest(
-            tool_name="ping",
-            parameters={"host": "192.0.2.1", "timeout": 1}
-        )
+        request = ToolRequest(tool_name="ping", parameters={"host": "192.168.1.1"})
         
         with patch('asyncio.create_subprocess_exec') as mock_create_subprocess:
-            # 模拟超时
+            # 模拟异步进程
             mock_process = AsyncMock()
+            
+            # 模拟communicate方法抛出超时异常
             mock_process.communicate = AsyncMock(side_effect=asyncio.TimeoutError("Command timed out"))
             
             mock_create_subprocess.return_value = mock_process

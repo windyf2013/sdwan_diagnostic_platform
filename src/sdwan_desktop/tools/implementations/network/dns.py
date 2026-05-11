@@ -166,6 +166,13 @@ class DnsTool:
             result["record_type"] = record_type
             result["dns_server_used"] = dns_server or "系统默认"
             
+            # 确保成功时返回 success=True
+            if result.get("resolved_ips") or result.get("cnames") or result.get("mx_records") or result.get("ns_records") or result.get("txt_records"):
+                result["success"] = True
+            else:
+                # 即使没有解析到记录，只要查询过程没报错，也视为成功（例如查询 AAAA 记录但域名只有 A 记录）
+                result["success"] = True
+
             logger.info(
                 f"DNS解析完成: {domain}, type={record_type}, "
                 f"IPs={len(result.get('resolved_ips', []))}, "

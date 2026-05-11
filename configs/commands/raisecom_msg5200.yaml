@@ -1,0 +1,134 @@
+"""
+RAISECOM MSG5200A 命令模板配置
+
+定义 RAISECOM MSG5200A 系列 SD-WAN CPE 设备需要执行的命令列表和执行顺序。
+遵循 SDWAN_SPEC.md §2.4 工具系统规范
+"""
+
+commands:
+  # ==================== 基础信息 ====================
+  - name: "show version all"
+    description: "获取设备版本、型号、序列号等基本信息"
+    timeout: 10
+    priority: 1
+    
+  - name: "show running-config"
+    description: "获取运行配置（包含 hostname、接口、路由、NAT、URL组等）"
+    timeout: 30
+    priority: 1
+
+  # ==================== 接口信息 ====================
+  - name: "show interface ge1"
+    description: "获取 WAN 接口详细信息"
+    timeout: 10
+    priority: 2
+    
+  - name: "show interface vlan1"
+    description: "获取 LAN 接口详细信息"
+    timeout: 10
+    priority: 2
+    
+  - name: "show interface vxlan2500110"
+    description: "获取跨境业务 VXLAN 接口信息"
+    timeout: 10
+    priority: 2
+    optional: true
+    
+  - name: "show interface vxlan2510110"
+    description: "获取直播业务 VXLAN 接口信息"
+    timeout: 10
+    priority: 2
+    optional: true
+    
+  - name: "show interface vxlan2600110"
+    description: "获取备用 VXLAN 接口信息"
+    timeout: 10
+    priority: 3
+    optional: true
+
+  # ==================== 路由表 ====================
+  - name: "show ip route"
+    description: "获取 IPv4 路由表（main 表）"
+    timeout: 10
+    priority: 2
+
+  # ==================== ARP 表 ====================
+  - name: "show arp"
+    description: "获取 ARP 表"
+    timeout: 10
+    priority: 3
+    optional: true
+
+  # ==================== DNS 配置 ====================
+  - name: "show dns active"
+    description: "获取 DNS 服务器配置"
+    timeout: 10
+    priority: 3
+    optional: true
+
+  # ==================== URL 分组策略 ====================
+  - name: "show url-group all security-ip"
+    description: "获取 URL 组匹配的源 IP 列表"
+    timeout: 10
+    priority: 3
+    optional: true
+
+  # ==================== 链路检测状态 ====================
+  - name: "show link detect"
+    description: "获取 BFD 链路检测状态（隧道健康检查）"
+    timeout: 10
+    priority: 2
+
+  # ==================== 系统状态 ====================
+  - name: "show cpu usage"
+    description: "获取 CPU 使用率"
+    timeout: 10
+    priority: 4
+    optional: true
+    
+  - name: "show memory usage"
+    description: "获取内存使用率"
+    timeout: 10
+    priority: 4
+    optional: true
+    
+  - name: "show system uptime"
+    description: "获取系统运行时间"
+    timeout: 10
+    priority: 4
+    optional: true
+
+  # ==================== Callhome 配置 ====================
+  - name: "show callhome all"
+    description: "获取控制器连接状态（Netconf callhome）"
+    timeout: 10
+    priority: 3
+    optional: true
+
+  # ==================== 诊断视图命令 ====================
+  - name: "diagnose:ip rule show"
+    description: "获取策略路由规则（需在 diagnose 视图执行）"
+    timeout: 10
+    priority: 3
+    optional: true
+    
+  - name: "diagnose:ip route show table 99"
+    description: "获取跨境业务路由表（table 99）"
+    timeout: 10
+    priority: 3
+    optional: true
+    
+  - name: "diagnose:ip route show table 100"
+    description: "获取直播业务路由表（table 100）"
+    timeout: 10
+    priority: 3
+    optional: true
+
+# ==================== 执行说明 ====================
+execution_notes:
+  - "priority 值越小，优先级越高"
+  - "optional: true 表示该命令失败不影响整体解析"
+  - "timeout 单位为秒，超时后跳过该命令继续执行下一个"
+  - "命令按 priority 分组执行，同组内按顺序执行"
+  - "diagnose: 前缀的命令需要在 diagnose 视图下执行"
+  - "接口命令需要根据实际配置的接口动态生成"

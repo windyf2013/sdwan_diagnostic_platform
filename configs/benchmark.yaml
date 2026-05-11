@@ -1,0 +1,17 @@
+# 性能基准测试阈值配置
+
+execution_time:
+  quick_check_ms: 30000    # 一键体检目标 < 30s
+  deep_dive_ms: 120000     # 深度诊断目标 < 2min
+  waterfall_ms: 45000      # 业务监测目标 < 45s
+  gui_startup_ms: 3000     # GUI启动目标 < 3s
+
+memory_usage:
+  idle_mb: 200             # 空闲内存 < 200MB
+  execution_peak_delta_mb: 100  # 执行时内存峰值增量 < 100MB
+  report_gen_delta_mb: 50  # 报告生成内存增量 < 50MB
+
+resource_limits:
+  max_concurrent_probes: 10
+  max_har_size_mb: 50
+  max_report_size_mb: 10

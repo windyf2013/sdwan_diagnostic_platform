@@ -1,0 +1,67 @@
+# ═══════════════════════════════════════════════════════════════════
+# 一键体检配置
+# 版本: 1.0.0
+# 遵循 Sprint3_plan.md 阶段3.2 配置结构参考
+# ═══════════════════════════════════════════════════════════════════
+
+quick_check:
+  # 采集开关
+  collection:
+    adapters: true
+    routes: true
+    dns: true
+    proxy: true
+    firewall: true
+    arp: true
+    ipv6: true
+
+  # 探测目标配置
+  targets:
+    # DNS服务器
+    dns_servers:
+      domestic:
+        - "114.114.114.114"
+        - "223.5.5.5"
+      international:
+        - "8.8.8.8"
+        - "1.1.1.1"
+
+    # 连通性测试目标
+    connectivity:
+      domestic:
+        - host: "www.baidu.com"
+          type: "http"
+        - host: "114.114.114.114"
+          type: "icmp"
+      international:
+        - host: "www.google.com"
+          type: "http"
+        - host: "www.youtube.com"
+          type: "http"
+        - host: "www.tiktok.com"
+          type: "http"
+        - host: "8.8.8.8"
+          type: "icmp"
+
+    # DNS分流测试域名
+    dns_split_domains:
+      - "www.baidu.com"
+      - "www.google.com"
+      - "www.youtube.com"
+      - "www.tiktok.com"
+
+  # 阈值配置
+  thresholds:
+    gateway_rtt_warning_ms: 100
+    gateway_loss_warning_pct: 5
+    dns_timeout_ms: 2000
+    dns_slow_ms: 500
+    international_loss_warning_pct: 10
+    domestic_loss_warning_pct: 5
+    rtt_stddev_warning_ms: 50
+
+  # 并发配置
+  concurrency:
+    max_probe_concurrent: 5
+    max_dns_concurrent: 3
+    probe_interval_seconds: 0.5

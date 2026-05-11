@@ -25,5 +25,16 @@ class FlowContext:
         if not self.trace_id:
             self.trace_id = str(uuid.uuid4())
         if not self.flow_id:
-            self.flow_id = str(uuid.uuid4())  
-Context = FlowContext  # ±£³ÖÏòºó¼æÈİĞÔ 
+            self.flow_id = str(uuid.uuid4())
+    
+    def get(self, key: str, default: Any = None) -> Any:
+        """è·å–ä¸Šä¸‹æ–‡æ•°æ®"""
+        return self.metadata.get(key, default)
+    
+    def set(self, key: str, value: Any) -> None:
+        """è®¾ç½®ä¸Šä¸‹æ–‡æ•°æ®"""
+        self.metadata[key] = value
+
+
+# ä¿æŒå‘åå…¼å®¹
+Context = FlowContext

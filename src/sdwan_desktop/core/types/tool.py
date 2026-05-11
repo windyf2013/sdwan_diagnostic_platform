@@ -5,7 +5,9 @@
 使用 dataclass(slots=True) 装饰器
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
+from datetime import datetime, timezone
+from enum import Enum
 from typing import Any, Dict, Optional
 from .base import BaseContract
 
@@ -37,15 +39,24 @@ class ToolRequest(BaseContract):
     
     def __init__(self, tool_name: str, parameters: Dict[str, Any] = None, 
                  timeout_seconds: Optional[int] = None, retry_count: Optional[int] = None,
-                 context: Dict[str, Any] = None):
-        """手动定义构造函数以解决字段顺序问题"""
+                 context: Dict[str, Any] = None, trace_id: Optional[str] = None):
+        """手动定义构造函数以解决字段顺序问题
+        
+        Args:
+            tool_name: 工具名称
+            parameters: 工具参数
+            timeout_seconds: 超时时间（秒）
+            retry_count: 重试次数
+            context: 执行上下文
+            trace_id: 追踪ID，如果提供则使用该值，否则自动生成
+        """
         # 不要调用super().__init__()，因为使用了@dataclass(slots=True, init=False)
         # 直接初始化BaseContract的字段
         import uuid
         from datetime import datetime, timezone
         
         self.id = str(uuid.uuid4())
-        self.trace_id = str(uuid.uuid4())
+        self.trace_id = trace_id or str(uuid.uuid4())
         self.timestamp = datetime.now(timezone.utc).isoformat()
         
         self.tool_name = tool_name
@@ -56,14 +67,28 @@ class ToolRequest(BaseContract):
     
     def to_json_dict(self) -> Dict[str, Any]:
         """转换为JSON可序列化字典"""
-        base_dict = super().to_json_dict()
-        base_dict.update({
-            "tool_name": self.tool_name,
-            "parameters": self.parameters,
-            "timeout_seconds": self.timeout_seconds,
-            "retry_count": self.retry_count,
-            "context": self.context,
-        })
+        from dataclasses import asdict
+        
+        def _convert_value(obj):
+            if hasattr(obj, 'to_json_dict'):
+                return obj.to_json_dict()
+            elif isinstance(obj, Enum):
+                return obj.value
+            elif isinstance(obj, datetime):
+                return obj.isoformat()
+            else:
+                return obj
+        
+        # 使用asdict获取所有字段，然后添加额外字段
+        base_dict = asdict(self)
+        
+        # 递归转换特殊类型
+        for key, value in base_dict.items():
+            if isinstance(value, list):
+                base_dict[key] = [_convert_value(item) for item in value]
+            else:
+                base_dict[key] = _convert_value(value)
+        
         return base_dict
 
 
@@ -95,13 +120,24 @@ class ToolResponse(BaseContract):
     
     def to_json_dict(self) -> Dict[str, Any]:
         """转换为JSON可序列化字典"""
-        base_dict = super().to_json_dict()
-        base_dict.update({
-            "success": self.success,
-            "data": self.data,
-            "error_code": self.error_code,
-            "error_message": self.error_message,
-            "duration_ms": self.duration_ms,
-            "metadata": self.metadata,
-        })
+        def _convert_value(obj):
+            if hasattr(obj, 'to_json_dict'):
+                return obj.to_json_dict()
+            elif isinstance(obj, Enum):
+                return obj.value
+            elif isinstance(obj, datetime):
+                return obj.isoformat()
+            else:
+                return obj
+            
+        # 直接使用asdict获取所有字段，避免super()调用的MRO问题
+        base_dict = asdict(self)
+            
+        # 递归转换特殊类型
+        for key, value in base_dict.items():
+            if isinstance(value, list):
+                base_dict[key] = [_convert_value(item) for item in value]
+            else:
+                base_dict[key] = _convert_value(value)
+            
         return base_dict

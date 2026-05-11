@@ -31,8 +31,8 @@ class Confidence(str, Enum):
 class DiagnosisEvidence(BaseContract):
     """诊断证据链"""
     
-    step_name: str                          # 产生证据的步骤
-    description: str                        # 证据描述
+    step_name: str = ""                     # 产生证据的步骤
+    description: str = ""                   # 证据描述
     probe_results: List[ProbeResult] = field(default_factory=list)
     config_snapshots: Dict[str, Any] = field(default_factory=dict)
     conclusion_hint: str = ""               # 指向的结论
@@ -42,9 +42,9 @@ class DiagnosisEvidence(BaseContract):
 class RootCause(BaseContract):
     """根因分析结果"""
     
-    cause_id: str                           # 根因ID
-    title: str                              # 根因标题
-    description: str                        # 详细描述
+    cause_id: str = ""                      # 根因ID
+    title: str = ""                         # 根因标题
+    description: str = ""                   # 详细描述
     severity: Severity = Severity.WARNING
     confidence: float = 0.0                 # 置信度 0-1
     evidence_refs: List[str] = field(default_factory=list)  # 证据ID列表
@@ -55,7 +55,7 @@ class RootCause(BaseContract):
 class Recommendation(BaseContract):
     """诊断建议"""
     
-    action: str                             # 建议动作
+    action: str = ""                        # 建议动作
     priority: int = 1                       # 优先级 1-5
     expected_outcome: str = ""              # 预期结果
     risk_level: Severity = Severity.INFO    # 操作风险等级
@@ -67,8 +67,8 @@ class DiagnosisResult(BaseContract):
     """最终诊断结果"""
     
     # 基本信息
-    diagnosis_type: str                     # quick_check / deep_dive / waterfall
-    target_description: str                 # 诊断目标描述
+    diagnosis_type: str = ""                # quick_check / deep_dive / waterfall
+    target_description: str = ""            # 诊断目标描述
     
     # 结论
     severity: Severity = Severity.INFO

@@ -1,0 +1,98 @@
+"""
+Cisco SD-WAN 命令模板配置
+
+定义 Cisco SD-WAN (Viptela) 设备需要执行的命令列表和执行顺序。
+遵循 SDWAN_SPEC.md §2.4 工具系统规范
+"""
+
+commands:
+  # ==================== 基础信息 ====================
+  - name: "show version"
+    description: "获取设备版本、型号、序列号等基本信息"
+    timeout: 10
+    priority: 1
+    
+  - name: "show running-config"
+    description: "获取运行配置（包含 hostname 等）"
+    timeout: 15
+    priority: 1
+
+  # ==================== 接口信息 ====================
+  - name: "show interface"
+    description: "获取所有接口的详细信息（状态、IP、MTU等）"
+    timeout: 15
+    priority: 2
+
+  # ==================== 路由表 ====================
+  - name: "show ip route"
+    description: "获取 IPv4 路由表"
+    timeout: 10
+    priority: 2
+    
+  - name: "show ipv6 route"
+    description: "获取 IPv6 路由表（可选）"
+    timeout: 10
+    priority: 3
+    optional: true
+
+  # ==================== SD-WAN 策略 ====================
+  - name: "show sdwan policy"
+    description: "获取 SD-WAN 策略配置"
+    timeout: 15
+    priority: 3
+    
+  - name: "show policy ipv4"
+    description: "获取 IPv4 策略（备选命令）"
+    timeout: 15
+    priority: 3
+    optional: true
+
+  # ==================== VPN/BFD 会话 ====================
+  - name: "show sdwan bfd sessions"
+    description: "获取 BFD 会话状态（隧道健康检查）"
+    timeout: 10
+    priority: 2
+    
+  - name: "show sdwan ipsec inbound-connections"
+    description: "获取 IPsec 入站连接"
+    timeout: 10
+    priority: 3
+    optional: true
+    
+  - name: "show sdwan ipsec outbound-connections"
+    description: "获取 IPsec 出站连接"
+    timeout: 10
+    priority: 3
+    optional: true
+
+  # ==================== NAT 规则 ====================
+  - name: "show ip nat translations"
+    description: "获取 NAT 转换表"
+    timeout: 10
+    priority: 3
+    
+  - name: "show ip nat statistics"
+    description: "获取 NAT 统计信息"
+    timeout: 10
+    priority: 4
+    optional: true
+
+  # ==================== 诊断信息 ====================
+  - name: "show sdwan system status"
+    description: "获取 SD-WAN 系统状态"
+    timeout: 10
+    priority: 4
+    optional: true
+    
+  - name: "show sdwan control connections"
+    description: "获取控制连接状态"
+    timeout: 10
+    priority: 4
+    optional: true
+
+# ==================== 执行说明 ====================
+execution_notes:
+  - "priority 值越小，优先级越高"
+  - "optional: true 表示该命令失败不影响整体解析"
+  - "timeout 单位为秒，超时后跳过该命令继续执行下一个"
+  - "命令按 priority 分组执行，同组内按顺序执行"

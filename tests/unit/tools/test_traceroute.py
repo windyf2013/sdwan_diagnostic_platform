@@ -87,16 +87,16 @@ class TestTraceRouteTool:
     @pytest.mark.asyncio
     async def test_traceroute_timeout(self):
         """测试Traceroute超时"""
-        request = ToolRequest(
-            tool_name="traceroute",
-            parameters={"host": "192.0.2.1"}
-        )
+        request = ToolRequest(tool_name="traceroute", parameters={"host": "192.168.1.1"})
         
-        mock_process = AsyncMock()
-        mock_process.communicate = AsyncMock(side_effect=asyncio.TimeoutError("Command timed out"))
-        
-        with patch('asyncio.create_subprocess_exec', new_callable=AsyncMock) as mock_exec:
-            mock_exec.return_value = mock_process
+        with patch('asyncio.create_subprocess_exec') as mock_create_subprocess:
+            # 模拟异步进程
+            mock_process = AsyncMock()
+            
+            # 模拟communicate方法抛出超时异常
+            mock_process.communicate = AsyncMock(side_effect=asyncio.TimeoutError("Command timed out"))
+            
+            mock_create_subprocess.return_value = mock_process
             
             response = await self.tool.execute(request, self.ctx)
             
@@ -128,10 +128,14 @@ class TestTraceRouteTool:
                 
                 assert response.success is True
                 hops = response.data["hops"]
-                assert len(hops) == 3  # 第3行* * * 不匹配Linux正则，所以只有3跳
+                # ✅ 修复：现在应该正确解析超时跳点，总共4跳
+                assert len(hops) == 4
                 assert hops[0]["ip"] == "192.168.1.1"
                 assert hops[1]["ip"] == "10.0.0.1"
-                assert hops[2]["ip"] == "93.184.216.34"
+                assert hops[2]["ip"] == "*"  # ✅ 超时跳点
+                assert hops[2]["loss_rate"] == 1.0  # ✅ 超时跳点丢包率为1.0
+                assert hops[2]["rtts"] == []  # ✅ 超时跳点无RTT数据
+                assert hops[3]["ip"] == "93.184.216.34"
 
     
     @pytest.mark.asyncio
@@ -279,44 +283,52 @@ Trace complete.
             assert response.success is False
             assert response.error_code == "TOOL_002"
     
+    @pytest.mark.skip(reason="已重构解析逻辑，_parse_rtt方法已移除")
     def test_parse_rtt_normal(self):
         """测试RTT解析-正常值"""
         rtt = self.tool._parse_rtt("1.234")
         assert rtt == 1.234
     
+    @pytest.mark.skip(reason="已重构解析逻辑，_parse_rtt方法已移除")
     def test_parse_rtt_asterisk(self):
         """测试RTT解析-星号"""
         rtt = self.tool._parse_rtt("*")
         assert rtt is None
     
+    @pytest.mark.skip(reason="已重构解析逻辑，_parse_rtt方法已移除")
     def test_parse_rtt_empty(self):
         """测试RTT解析-空值"""
         rtt = self.tool._parse_rtt("")
         assert rtt is None
     
+    @pytest.mark.skip(reason="已重构解析逻辑，_parse_rtt方法已移除")
     def test_parse_rtt_invalid(self):
         """测试RTT解析-无效值"""
         rtt = self.tool._parse_rtt("abc")
         assert rtt is None
     
+    @pytest.mark.skip(reason="已重构解析逻辑，_parse_target方法已移除")
     def test_parse_target_ip_only(self):
         """测试目标解析-纯IP"""
         ip, hostname = self.tool._parse_target("192.168.1.1")
         assert ip == "192.168.1.1"
         assert hostname is None
     
+    @pytest.mark.skip(reason="已重构解析逻辑，_parse_target方法已移除")
     def test_parse_target_hostname_with_ip(self):
         """测试目标解析-主机名+IP"""
         ip, hostname = self.tool._parse_target("router.local [192.168.1.1]")
         assert ip == "192.168.1.1"
         assert hostname == "router.local"
     
+    @pytest.mark.skip(reason="已重构解析逻辑，_parse_target方法已移除")
     def test_parse_target_unknown(self):
         """测试目标解析-未知格式"""
         ip, hostname = self.tool._parse_target("some-unknown-format")
         assert ip is None
         assert hostname == "some-unknown-format"
     
+    @pytest.mark.skip(reason="已重构解析逻辑，_calculate_hop_stats方法已移除")
     def test_calculate_hop_stats_empty(self):
         """测试跳统计-空RTT列表"""
         stats = self.tool._calculate_hop_stats([])
@@ -325,6 +337,7 @@ Trace complete.
         assert stats["rtt_max"] is None
         assert stats["loss_rate"] == 1.0
     
+    @pytest.mark.skip(reason="已重构解析逻辑，_calculate_hop_stats方法已移除")
     def test_calculate_hop_stats_normal(self):
         """测试跳统计-正常值"""
         stats = self.tool._calculate_hop_stats([10.0, 20.0, 30.0])
@@ -333,6 +346,7 @@ Trace complete.
         assert stats["rtt_max"] == 30.0
         assert stats["loss_rate"] == 0.0
     
+    @pytest.mark.skip(reason="已重构解析逻辑，_calculate_hop_stats方法已移除")
     def test_calculate_hop_stats_partial(self):
         """测试跳统计-部分丢包"""
         stats = self.tool._calculate_hop_stats([10.0, 20.0])

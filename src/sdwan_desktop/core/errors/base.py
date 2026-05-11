@@ -2,19 +2,12 @@
 基础错误类定义
 """
 
-from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 import uuid
 
 
-@dataclass(slots=True)
 class BaseError(Exception):
     """所有错误的基类"""
-    
-    error_code: str
-    message: str
-    context: Dict[str, Any] = field(default_factory=dict)
-    trace_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     
     def __init__(
         self,
