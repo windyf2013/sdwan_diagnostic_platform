@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
 from sdwan_desktop.core.types.cpe_config import (
+    CpeArpEntry,
     CpeConfiguration,
     InterfaceInfo,
     NatRuleInfo,
@@ -24,6 +25,106 @@ from sdwan_desktop.core.types.cpe_config import (
 from sdwan_desktop.services.parser.vendor import VendorConfigParser
 
 logger = logging.getLogger(__name__)
+
+
+def raisecom_product_version_token(raw_output: str) -> Optional[str]:
+    """提取 ``Product Version :`` 行的字段值。
+
+    取值可为历史形态 ``P410_423_xxxx`` / ``P410_433_2511``，或固定代际 **``A.00``** / **``B.00``**。
+    **不得**用于从 ``Software Version`` 行推断设备类型（见 ``is_raisecom_msg5200b_version_output`` 文档
+    与 ``spec/detail_function_design.md`` §2.2.1）。
+    """
+    if not raw_output:
+        return None
+    match = re.search(r"Product Version\s*:\s*(\S+)", raw_output, re.IGNORECASE)
+    return match.group(1).strip() if match else None
+
+
+def raisecom_product_series_token(raw_output: str) -> Optional[str]:
+    """提取 ``Product series :`` 行的字段值。
+
+    5200B 现网样例（``whole_config_5200b.txt``）在 ``show version all`` 中常给出
+    ``Product series : P410_433_2511``（**稳定包含子串 433**），未必同时存在
+    ``Product Version :`` 行；与 ``raisecom_product_version_token`` 互补用于代际指纹。
+
+    **不得**使用 ``Software Version`` 参与 MSG5200A/B 类型指纹（5200B 输出中通常无该字段，
+    且不作为可靠代际依据）。见 ``spec/detail_function_design.md`` §2.2.1。
+    """
+    if not raw_output:
+        return None
+    match = re.search(r"Product\s+series\s*:\s*(\S+)", raw_output, re.IGNORECASE)
+    return match.group(1).strip() if match else None
+
+
+def is_raisecom_msg5200b_version_output(raw_output: str) -> bool:
+    """判断版本类输出是否属于 Raisecom MSG5200B。
+
+    产品指纹规则（与 ``spec/detail_function_design.md`` §2.2.1 一致）：
+
+    **禁止**：使用 ``Software Version`` 作为类型判定依据。
+
+    **5200B 判定（满足其一即真）**：
+    - ``RCIOS version`` 主版本为 **4.33.xxx**；
+    - ``Product series`` 行值**稳定包含子串** ``433``（如 ``P410_433_2511``）；
+    - ``PV`` 或 ``Product Version`` 行为固定代际硬件版本 **B.00**（整行取值匹配，不依赖
+      ``Product Version`` 行内是否含 ``433`` 子串）；
+    - ``Product series`` 行为 ``RCIOS_4.33``（若存在）。
+
+    与 5200A 互斥；注册表须先匹配 5200B 再兜底 5200A。
+
+    Args:
+        raw_output: ``show version`` / ``show version all`` 等命令输出。
+
+    Returns:
+        若判定为 5200B 则返回 True。
+    """
+    if not raw_output:
+        return False
+    if re.search(r"RCIOS\s+version\s*:\s*4\.33\.", raw_output, re.IGNORECASE):
+        return True
+    prod_series = raisecom_product_series_token(raw_output)
+    if prod_series and "433" in prod_series:
+        return True
+    if re.search(r"PV\s*:\s*B\.00\b", raw_output, re.IGNORECASE):
+        return True
+    pv_token = raisecom_product_version_token(raw_output)
+    if pv_token and pv_token.upper() == "B.00":
+        return True
+    if re.search(r"Product\s+series\s*:\s*RCIOS_4\.33\b", raw_output, re.IGNORECASE):
+        return True
+    return False
+
+
+def is_raisecom_msg5200a_version_output(raw_output: str) -> bool:
+    """判断版本类输出是否显式符合 Raisecom MSG5200A（用于文档与扩展逻辑）。
+
+    **禁止**：使用 ``Software Version`` 作为类型判定依据。
+
+    **5200A 判定（满足其一即真）**：
+    - ``RCIOS version`` 主版本为 **4.23.xxx**；
+    - ``Product Version`` 行值含 **423**（历史 ``P410_423_xxxx`` 形态，与 B 的 ``433`` 区分）；
+    - ``PV`` 或 ``Product Version`` 行为固定代际硬件版本 **A.00**；
+    - ``Product series`` 行为 ``RCIOS_4.23``（若存在）。
+
+    **说明**：5200A 的 ``Product series`` 在不同固件上**不一定出现或不稳定**，
+    故**不**将「仅 ``Product series`` 含 423」作为显式 A 指纹（避免误判）；类型兜底仍由
+    ``RaisecomMsg5200Parser.detect_vendor`` 在排除 B 后承担。
+    """
+    if not raw_output:
+        return False
+    if re.search(r"RCIOS\s+version\s*:\s*4\.23\.", raw_output, re.IGNORECASE):
+        return True
+    prod_ver = raisecom_product_version_token(raw_output)
+    if prod_ver and "423" in prod_ver:
+        return True
+    if re.search(r"PV\s*:\s*A\.00\b", raw_output, re.IGNORECASE):
+        return True
+    pv_token = raisecom_product_version_token(raw_output)
+    if pv_token and pv_token.upper() == "A.00":
+        return True
+    if re.search(r"Product\s+series\s*:\s*RCIOS_4\.23\b", raw_output, re.IGNORECASE):
+        return True
+    return False
 
 
 @dataclass(slots=True)
@@ -139,6 +240,20 @@ class RaisecomUrlGroup:
     raw_block: Optional[str] = None
 
 
+@dataclass(slots=True)
+class RaisecomConntrackEntry:
+    """RAISECOM nf_conntrack 会话条目（轻量解析）。"""
+    proto: str = ""
+    src: str = ""
+    dst: str = ""
+    sport: Optional[int] = None
+    dport: Optional[int] = None
+    state: str = ""
+    packets: Optional[int] = None
+    bytes: Optional[int] = None
+    raw_line: Optional[str] = None
+
+
 class RaisecomMsg5200Parser(VendorConfigParser):
     """RAISECOM MSG5200A 系列配置解析器
     
@@ -162,6 +277,7 @@ class RaisecomMsg5200Parser(VendorConfigParser):
         self.url_groups_detail: List[RaisecomUrlGroup] = []
         self.ip_rules: List[Dict] = []
         self.policy_routes: Dict[str, List[RouteEntry]] = {}
+        self.nf_conntrack_entries: List[RaisecomConntrackEntry] = []
     
     def get_vendor_name(self) -> str:
         """返回厂商名称标识"""
@@ -188,17 +304,25 @@ class RaisecomMsg5200Parser(VendorConfigParser):
         ]
         
         output_lower = raw_output.lower()
-        return any(ind in output_lower for ind in indicators)
+        if not any(ind in output_lower for ind in indicators):
+            return False
+        # 5200B 由专用解析器处理（与型号字符串解耦，见 is_raisecom_msg5200b_version_output）
+        if is_raisecom_msg5200b_version_output(raw_output):
+            return False
+        return True
     
     def parse_version(self, raw_output: str) -> str:
         """解析软件版本
-        
+
         支持的格式：
         - RCIOS version   : 4.23.387.20250805
-        
+        - Product Version : （取行末令牌，可为 ``B.00`` 或历史 ``P410_xxx`` 形态）
+
+        不使用 ``Software Version`` 行（见 ``spec/detail_function_design.md`` §2.2.1）。
+
         Args:
             raw_output: show version all 命令输出
-            
+
         Returns:
             版本号字符串，如 "4.23.387.20250805"，失败返回 "unknown"
         """
@@ -207,6 +331,12 @@ class RaisecomMsg5200Parser(VendorConfigParser):
         
         # 匹配 RCIOS version 行
         match = re.search(r"RCIOS version\s*:\s*(\S+)", raw_output, re.IGNORECASE)
+        if match:
+            return match.group(1)
+
+        # 禁止使用 Software Version 作为版本或设备代际依据（5200B 常无该字段，且不可靠）。
+
+        match = re.search(r"Product Version\s*:\s*(\S+)", raw_output, re.IGNORECASE)
         if match:
             return match.group(1)
         
@@ -225,6 +355,11 @@ class RaisecomMsg5200Parser(VendorConfigParser):
         if not raw_output:
             return "unknown"
         
+        # 匹配 Product Name 行（部分机型使用该字段）
+        match = re.search(r"Product Name\s*:\s*(\S+(?:-\S+)*)", raw_output, re.IGNORECASE)
+        if match:
+            return match.group(1)
+
         # 匹配 PN (Part Number) 行
         match = re.search(r"PN\s*:\s*(\S+(?:-\S+)*)", raw_output, re.IGNORECASE)
         if match:
@@ -237,28 +372,44 @@ class RaisecomMsg5200Parser(VendorConfigParser):
         
         return "unknown"
     
-    def _detect_hostname(self, raw_output: str) -> str:
+    def _detect_hostname(
+        self,
+        raw_output: str,
+        *,
+        hostname_command_out: str = "",
+    ) -> str:
         """检测主机名
-        
+
+        优先 ``show running-config`` 中的 ``hostname <name>``（与 enable / 用户 / test-node 等视图
+        提示符前缀一致）；其次 enable 视图下 ``hostname`` 命令回显（与配置对照，配置缺失时兜底）；
+        最后从交互输出里猜测 ``name[#>]`` 前缀。与 su/diagnose 诊断 shell 无关。
+
         Args:
-            raw_output: show running-config 或 show version all 命令输出
-            
+            raw_output: ``show running-config`` 或 ``show version all`` 等含配置/提示的输出
+            hostname_command_out: enable 下执行 ``hostname`` 的净输出（采集键 ``hostname``）
+
         Returns:
-            主机名字符串，失败返回 "unknown"
+            主机名字符串，失败返回 ``unknown``
         """
+        if raw_output:
+            match = re.search(r"^hostname\s+(\S+)", raw_output, re.MULTILINE | re.IGNORECASE)
+            if match:
+                return match.group(1)
+
+        for line in (hostname_command_out or "").replace("\r", "").splitlines():
+            s = line.strip()
+            if not s or s.endswith("#") or s == "#":
+                continue
+            if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", s):
+                return s
+
         if not raw_output:
             return "unknown"
-        
-        # 从 hostname 配置行提取
-        match = re.search(r"^hostname\s+(\S+)", raw_output, re.MULTILINE | re.IGNORECASE)
+
+        match = re.search(r"([a-zA-Z0-9_-]+)[#>]", raw_output)
         if match:
             return match.group(1)
-        
-        # 从 prompt 提取（备选方案）
-        match = re.search(r"([a-zA-Z0-9_-]+)#", raw_output)
-        if match:
-            return match.group(1)
-        
+
         return "unknown"
     
     def parse_system_info(self, raw_output: str) -> Optional[RaisecomSystemInfo]:
@@ -957,6 +1108,48 @@ class RaisecomMsg5200Parser(VendorConfigParser):
             logger.error(f"解析接口信息失败: {e}", exc_info=True)
         
         return interfaces
+
+    def parse_nf_conntrack(self, raw_output: str) -> List[RaisecomConntrackEntry]:
+        """解析 nf_conntrack 输出（按 grep 结果逐行容错提取）。"""
+        entries: List[RaisecomConntrackEntry] = []
+        if not raw_output:
+            self.nf_conntrack_entries = entries
+            return entries
+        for line in raw_output.strip().split("\n"):
+            s = line.strip()
+            if not s:
+                continue
+            try:
+                proto_match = re.search(r"\b(tcp|udp|icmp)\b", s, re.IGNORECASE)
+                src_match = re.search(r"\bsrc=(\d+\.\d+\.\d+\.\d+)\b", s)
+                dst_match = re.search(r"\bdst=(\d+\.\d+\.\d+\.\d+)\b", s)
+                sport_match = re.search(r"\bsport=(\d+)\b", s)
+                dport_match = re.search(r"\bdport=(\d+)\b", s)
+                state_match = re.search(
+                    r"\b(TIME_WAIT|ESTABLISHED|SYN_SENT|SYN_RECV|FIN_WAIT|CLOSE_WAIT|LAST_ACK|CLOSED|UNREPLIED|ASSURED)\b",
+                    s,
+                    re.IGNORECASE,
+                )
+                packets_match = re.search(r"\bpackets=(\d+)\b", s)
+                bytes_match = re.search(r"\bbytes=(\d+)\b", s)
+                entries.append(
+                    RaisecomConntrackEntry(
+                        proto=(proto_match.group(1).lower() if proto_match else ""),
+                        src=(src_match.group(1) if src_match else ""),
+                        dst=(dst_match.group(1) if dst_match else ""),
+                        sport=(int(sport_match.group(1)) if sport_match else None),
+                        dport=(int(dport_match.group(1)) if dport_match else None),
+                        state=(state_match.group(1).upper() if state_match else ""),
+                        packets=(int(packets_match.group(1)) if packets_match else None),
+                        bytes=(int(bytes_match.group(1)) if bytes_match else None),
+                        raw_line=s,
+                    )
+                )
+            except Exception as exc:
+                logger.warning("解析 nf_conntrack 行失败: %s (%s)", s[:120], exc)
+        self.nf_conntrack_entries = entries
+        logger.info("成功解析 %d 条 nf_conntrack 会话", len(entries))
+        return entries
     
     def parse_routes(self, raw_output: str) -> List[RouteEntry]:
         """解析路由表
@@ -995,6 +1188,29 @@ class RaisecomMsg5200Parser(VendorConfigParser):
         
         logger.info(f"成功解析 {len(routes)} 条路由")
         return routes
+
+    def parse_interfaces_from_running_config(self, config_output: str) -> List[InterfaceInfo]:
+        """从 running-config 回退解析接口。"""
+        interfaces: List[InterfaceInfo] = []
+        if not config_output:
+            return interfaces
+
+        pattern = r"^interface\s+(\S+)\n(.*?)(?=^interface\s+\S+|\Z)"
+        for match in re.finditer(pattern, config_output, re.MULTILINE | re.DOTALL):
+            name = match.group(1)
+            block = match.group(2)
+            ip_match = re.search(r"ip address\s+(\d+\.\d+\.\d+\.\d+)", block)
+            desc_match = re.search(r"aliasname\s+(\S+)", block)
+            iface = InterfaceInfo(
+                id=f"iface_cfg_{name}",
+                name=name,
+                ip_address=ip_match.group(1) if ip_match else None,
+                status="unknown",
+                description=desc_match.group(1) if desc_match else None,
+                raw_block=f"interface {name}\n{block}",
+            )
+            interfaces.append(iface)
+        return interfaces
     
     def _parse_single_route_line(self, line: str) -> Optional[RouteEntry]:
         """解析单条路由行
@@ -1191,8 +1407,13 @@ class RaisecomMsg5200Parser(VendorConfigParser):
             tunnels.append(tunnel)
         
         # 如果没有找到 link detect 输出，尝试从 running-config 解析隧道定义
+        # 隧道名可能为 tunnel1、tunnel1_5 等，不能用 tunnel\d+（会在 tunnel1_5 处截断导致整段匹配失败）
         if not tunnels:
-            tunnel_pattern = r"tunnel\s+(tunnel\d+)\s*\n.*?type\s+(\S+).*?peer\s+(\d+\.\d+\.\d+\.\d+)"
+            tunnel_pattern = (
+                r"tunnel\s+(tunnel[\w]+)\s*\n"
+                r".*?\btype\s+(\S+).*?"
+                r"\bpeer\s+(\d+\.\d+\.\d+\.\d+)"
+            )
             matches = re.finditer(tunnel_pattern, raw_output, re.MULTILINE | re.DOTALL | re.IGNORECASE)
             
             for match in matches:
@@ -1208,6 +1429,7 @@ class RaisecomMsg5200Parser(VendorConfigParser):
                     state="unknown",
                     type=tunnel_type,
                     uptime_seconds=None,
+                    raw_block=match.group(0).strip(),
                 )
                 tunnels.append(tunnel)
         
@@ -1270,7 +1492,7 @@ class RaisecomMsg5200Parser(VendorConfigParser):
             完整的 CpeConfiguration 对象
         """
         # 获取各命令输出
-        version_output = raw_outputs.get("show version all", "")
+        version_output = raw_outputs.get("show version all", "") or raw_outputs.get("show version", "")
         config_output = raw_outputs.get("show running-config", "")
         route_output = raw_outputs.get("show ip route", "")
         link_detect_output = raw_outputs.get("show link detect", "")
@@ -1284,12 +1506,19 @@ class RaisecomMsg5200Parser(VendorConfigParser):
         ip_rule_output = raw_outputs.get("diagnose:ip rule show", "")
         policy_route_99 = raw_outputs.get("diagnose:ip route show table 99", "")
         policy_route_100 = raw_outputs.get("diagnose:ip route show table 100", "")
+        hostname_cmd_out = raw_outputs.get("hostname", "")
+        nf_conntrack_outputs = [
+            v for k, v in raw_outputs.items() if k.startswith("diagnose:nf_conntrack grep ")
+        ]
         
         # 解析基础信息
         vendor = self.get_vendor_name()
         model = self._detect_model(version_output)
         version = self.parse_version(version_output)
-        hostname = self._detect_hostname(config_output or version_output)
+        hostname = self._detect_hostname(
+            config_output or version_output,
+            hostname_command_out=hostname_cmd_out,
+        )
         
         # 解析系统详细信息
         self.parse_system_info(version_output)
@@ -1313,6 +1542,8 @@ class RaisecomMsg5200Parser(VendorConfigParser):
         self.parse_ip_rules(ip_rule_output)
         self.parse_policy_routes(policy_route_99, "99")
         self.parse_policy_routes(policy_route_100, "100")
+        merged_conntrack = "\n".join(x for x in nf_conntrack_outputs if x)
+        self.parse_nf_conntrack(merged_conntrack)
         
         # 解析接口（需要从多个 show interface 命令输出中聚合）
         interfaces = []
@@ -1320,13 +1551,33 @@ class RaisecomMsg5200Parser(VendorConfigParser):
             if cmd_name.startswith("show interface "):
                 iface_list = self.parse_interfaces(output)
                 interfaces.extend(iface_list)
+        if not interfaces:
+            interfaces = self.parse_interfaces_from_running_config(config_output)
         
         # 解析其他配置
         routes = self.parse_routes(route_output) if route_output else []
         sdwan_policies = self.parse_sdwan_policies(config_output) if config_output else []
-        vpn_tunnels = self.parse_vpn_tunnels(link_detect_output or config_output) if (link_detect_output or config_output) else []
+        # NOTE:
+        # show link detect 在该设备上可能仅返回 "!\n#"（非空但无会话信息），
+        # 若直接使用 `link_detect_output or config_output` 会屏蔽 running-config 解析，
+        # 导致 tunnel/vxlan 定义无法入库。
+        tunnel_parse_input = "\n".join(
+            part for part in [link_detect_output, config_output] if part
+        )
+        vpn_tunnels = self.parse_vpn_tunnels(tunnel_parse_input) if tunnel_parse_input else []
         nat_rules = self.parse_nat_rules(config_output) if config_output else []
         
+        arp_for_cfg = [
+            CpeArpEntry(
+                ip_address=e.ip_address,
+                mac_address=e.mac_address,
+                interface=e.interface,
+                state=e.state,
+                raw_line=e.raw_line,
+            )
+            for e in self.arp_entries
+        ]
+
         # 构建配置对象
         config = CpeConfiguration(
             id=f"cpe_{hostname}_{model}",
@@ -1339,6 +1590,7 @@ class RaisecomMsg5200Parser(VendorConfigParser):
             sdwan_policies=sdwan_policies,
             vpn_tunnels=vpn_tunnels,
             nat_rules=nat_rules,
+            arp_entries=arp_for_cfg,
             raw_outputs=raw_outputs,
         )
         

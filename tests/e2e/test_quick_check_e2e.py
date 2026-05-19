@@ -14,6 +14,7 @@ from sdwan_desktop.core.types.context import FlowContext
 from sdwan_desktop.core.types.diagnosis import DiagnosisResult, Severity, RootCause
 from sdwan_desktop.flow.definitions.quick_check import QUICK_CHECK_FLOW
 from sdwan_desktop.runtime.engine import FlowRuntime
+from sdwan_desktop.core.types.flow_state import FlowStatus
 from sdwan_desktop.services.collector.windows_collector import SystemInfoSnapshot
 from sdwan_desktop.services.connectivity import ConnectivityTestResult
 from sdwan_desktop.services.dns_split import DnsSplitTestResult
@@ -83,7 +84,7 @@ async def test_quick_check_happy_path(sample_flow_context, temp_dir):
         
         # 4. Mock RuleEngine
         mock_rule_engine_instance = AsyncMock()
-        mock_rule_engine_instance.evaluate.return_value = []
+        mock_rule_engine_instance.evaluate.return_value = MagicMock(results=[])
         MockRuleEngine.return_value = mock_rule_engine_instance
         
         # 5. Mock HtmlReportBuilder
@@ -98,35 +99,41 @@ async def test_quick_check_happy_path(sample_flow_context, temp_dir):
             return snapshot
             
         async def step_gateway(ctx):
-            result = await mock_connectivity_instance.test_gateway("192.168.1.1", ctx)
+            result = MagicMock(success=True)
             ctx.set("gateway_ping_result", result)
             return result
-            
+
         async def step_dns(ctx):
-            dns_servers = ["114.114.114.114", "223.5.5.5"]
-            results = await mock_connectivity_instance.test_domestic_dns(dns_servers, ctx)
-            ctx.set("dns_results", results)
-            return results
+            dns_probe = MagicMock(success=True, target="114.114.114.114", metrics=MagicMock(rtt_avg=10.0))
+            ctx.set("dns_results", [dns_probe])
+            return [dns_probe]
 
         async def step_internet(ctx):
-            domestic_targets = [
-                {"host": "www.baidu.com", "type": "http"},
-            ]
-            international_targets = [
-                {"host": "www.google.com", "type": "http"},
-                {"host": "www.youtube.com", "type": "http"},
-                {"host": "www.tiktok.com", "type": "http"},
-            ]
-            
-            domestic_res = await mock_connectivity_instance.test_domestic_targets(domestic_targets, ctx)
-            international_res = await mock_connectivity_instance.test_international_targets(international_targets, ctx)
-            ctx.set("domestic_connectivity", domestic_res)
-            ctx.set("international_connectivity", international_res)
-            return {"domestic": domestic_res, "international": international_res}
+            net = ConnectivityTestResult(
+                domestic_success_rate=0.5,
+                international_success_rate=0.3,
+            )
+            ctx.set("internet_connectivity_result", net)
+            return net
 
-        async def step_dns_split(ctx):
-            result = await mock_dns_instance.test_all_domains(["www.google.com"], ["114.114.114.114"], ["8.8.8.8"], ctx)
-            ctx.set("dns_split_result", result)
+        async def step_connectivity_check(ctx):
+            from sdwan_desktop.flow.handlers.flow_control import check_connectivity
+
+            return await check_connectivity(ctx=ctx)
+
+        async def step_cpe_link_routing(ctx):
+            from sdwan_desktop.services.dns_split import CpeLinkRouteResult
+
+            result = CpeLinkRouteResult(
+                total_domains_tested=0,
+                domain_results=[],
+                detected_links=[],
+                link_distribution={},
+                is_multi_link=False,
+                multi_link_count=0,
+                errors=[],
+            )
+            ctx.set("cpe_link_routing_result", result)
             return result
 
         async def step_analyze(ctx):
@@ -135,15 +142,24 @@ async def test_quick_check_happy_path(sample_flow_context, temp_dir):
             return rule_results
 
         async def step_conclusion(ctx):
-            conclusion = {"summary": "诊断完成"}
-            ctx.set("conclusion", conclusion)
-            return conclusion
+            diagnosis = DiagnosisResult(
+                trace_id=ctx.trace_id,
+                diagnosis_type="quick_check",
+                summary="诊断完成",
+                severity=Severity.INFO,
+                root_causes=[],
+                recommendations=[],
+                overall_confidence=1.0,
+            )
+            ctx.set("diagnosis_result", diagnosis)
+            return diagnosis
 
         async def step_report(ctx):
-            report_content = mock_reporter_instance.build_quick_check_report(ctx)
+            diagnosis = ctx.get("diagnosis_result")
+            report_content = mock_reporter_instance.build_quick_check_report(diagnosis, temp_dir / "out.html")
             report_path = temp_dir / "quick_check_report.html"
-            with open(report_path, "w", encoding='utf-8') as f:
-                f.write(report_content)
+            with open(report_path, "w", encoding="utf-8") as f:
+                f.write(str(report_content))
             ctx.set("report_path", str(report_path))
             return str(report_path)
         
@@ -152,10 +168,11 @@ async def test_quick_check_happy_path(sample_flow_context, temp_dir):
             "step-gateway": step_gateway,
             "step-dns": step_dns,
             "step-internet": step_internet,
-            "step-dns-split": step_dns_split,
+            "step-connectivity-check": step_connectivity_check,
+            "step-cpe-link-routing": step_cpe_link_routing,
             "step-analyze": step_analyze,
             "step-conclusion": step_conclusion,
-            "step-report": step_report
+            "step-report": step_report,
         }
         
         # 执行流程
@@ -165,15 +182,14 @@ async def test_quick_check_happy_path(sample_flow_context, temp_dir):
         assert len(snapshots) == len(QUICK_CHECK_FLOW.steps)
         for step in QUICK_CHECK_FLOW.steps:
             assert step.id in snapshots
-            assert snapshots[step.id].status.value == "completed" or snapshots[step.id].status.value == "COMPLETED"
-        
+            assert snapshots[step.id].status == FlowStatus.COMPLETED
+
         # 验证点 3: 关键中间结果已存储到上下文
         assert ctx.get("system_snapshot") is not None
         assert ctx.get("gateway_ping_result") is not None
         assert ctx.get("dns_results") is not None
-        assert ctx.get("domestic_connectivity") is not None
-        assert ctx.get("international_connectivity") is not None
-        assert ctx.get("dns_split_result") is not None
+        assert ctx.get("internet_connectivity_result") is not None
+        assert ctx.get("cpe_link_routing_result") is not None
         assert ctx.get("rule_results") is not None
         
         # 验证点 4: trace_id 贯穿 (通过 Context 验证)

@@ -67,24 +67,38 @@ def _evaluate_ip_001(ctx: Any) -> bool:
     return ip_config.ip_address.startswith("169.254")
 
 
+def find_ip_conflicts_from_arp(arp_table: List) -> List[Dict[str, Any]]:
+    """从 ARP 表提取 IP 冲突：同一 IP 对应多个不同 MAC。"""
+    if not arp_table:
+        return []
+
+    ip_macs: Dict[str, set] = {}
+    ip_entries: Dict[str, List[Dict[str, str]]] = {}
+    for entry in arp_table:
+        ip = getattr(entry, "ip_address", None) or getattr(entry, "ip", None)
+        mac = getattr(entry, "mac_address", None) or getattr(entry, "mac", None)
+        if not ip or not mac:
+            continue
+        ip_macs.setdefault(ip, set()).add(mac)
+        row = {"mac": mac, "interface": getattr(entry, "interface", "") or ""}
+        ip_entries.setdefault(ip, [])
+        if row not in ip_entries[ip]:
+            ip_entries[ip].append(row)
+
+    return [
+        {"ip": ip, "macs": sorted(ip_macs[ip]), "entries": ip_entries[ip]}
+        for ip in ip_macs
+        if len(ip_macs[ip]) > 1
+    ]
+
+
 @pure_function
 def _evaluate_ip_002(ctx: Any) -> bool:
     """IP-002: IP地址冲突
 
-    通过ARP表检测是否有重复IP。
+    通过ARP表检测是否有重复IP（同一 IP 对应多个 MAC）。
     """
-    arp_table = ctx.arp_table
-    if not arp_table:
-        return False
-
-    # 检查ARP表中是否有重复IP
-    ip_counts: Dict[str, int] = {}
-    for entry in arp_table:
-        ip = getattr(entry, "ip_address", None) or getattr(entry, "ip", None)
-        if ip:
-            ip_counts[ip] = ip_counts.get(ip, 0) + 1
-
-    return any(count > 1 for count in ip_counts.values())
+    return len(find_ip_conflicts_from_arp(ctx.arp_table)) > 0
 
 
 @pure_function
@@ -96,7 +110,17 @@ def _build_ip_001_message(ctx: Any) -> str:
 @pure_function
 def _build_ip_002_message(ctx: Any) -> str:
     """构建IP-002诊断消息"""
-    return "检测到IP地址冲突"
+    conflicts = find_ip_conflicts_from_arp(ctx.arp_table)
+    if not conflicts:
+        return "检测到IP地址冲突"
+
+    lines = ["检测到IP地址冲突，冲突详情如下："]
+    for item in conflicts:
+        mac_parts = [
+            f"{e['mac']}（{e['interface'] or '未知接口'}）" for e in item["entries"]
+        ]
+        lines.append(f"  · IP {item['ip']}: " + "；".join(mac_parts))
+    return "\n".join(lines)
 
 
 # ==================== 路由规则 ====================
@@ -110,31 +134,58 @@ def _evaluate_route_001(ctx: Any) -> bool:
 
 @pure_function
 def _evaluate_route_002(ctx: Any) -> bool:
-    """ROUTE-002: 默认路由metric过高"""
-    default_routes = ctx.default_routes
-    if not default_routes:
+    """ROUTE-002: 默认路由 metric 竞争（仅多条默认路由时评估）
+
+    Windows 自动 metric = 接口跃点 + 路由跃点数，用户通常不会手调。
+    单一默认路由时绝对值高低无诊断意义；多条默认路由由 ROUTE-001 覆盖。
+    本规则仅在存在 2+ 条默认路由且 metric 差异显著时提示选路不明确。
+    """
+    defaults = ctx.default_routes
+    if len(defaults) < 2:
         return False
-    # 取第一条默认路由的metric
-    metric = default_routes[0].metric
-    if metric is None:
+    metrics = [r.metric for r in defaults if r.metric is not None]
+    if len(metrics) < 2:
         return False
-    return metric > 100
+    return (max(metrics) - min(metrics)) >= 50
 
 
 @pure_function
 def _build_route_001_message(ctx: Any) -> str:
-    """构建ROUTE-001诊断消息"""
-    return f"存在 {len(ctx.default_routes)} 条默认路由"
+    """构建ROUTE-001诊断消息
+
+    在描述中直接列出每条默认路由的网关/接口/metric，便于用户在「根因分析」
+    卡片中一眼看清「到底是哪几条默认路由在并存」。
+    """
+    defaults = list(ctx.default_routes)
+    lines = [f"存在 {len(defaults)} 条默认路由："]
+    for idx, r in enumerate(defaults, 1):
+        gw = getattr(r, "gateway", "") or "on-link"
+        iface = getattr(r, "interface", "") or "?"
+        m = r.metric if r.metric is not None else "?"
+        proto = getattr(r, "protocol", "") or ""
+        proto_repr = f" [{proto}]" if proto else ""
+        lines.append(f"  #{idx} 0.0.0.0/0 via {gw} dev \"{iface}\" metric {m}{proto_repr}")
+    return "\n".join(lines)
 
 
 @pure_function
 def _build_route_002_message(ctx: Any) -> str:
     """构建ROUTE-002诊断消息"""
-    metric = 0
-    default_routes = ctx.default_routes
-    if default_routes and default_routes[0].metric is not None:
-        metric = default_routes[0].metric
-    return f"默认路由Metric值为 {metric}"
+    defaults = list(ctx.default_routes)
+    metrics = [r.metric for r in defaults if r.metric is not None]
+    lines = []
+    if metrics:
+        lines.append(
+            f"多条默认路由 metric 差异较大（{min(metrics)} – {max(metrics)}，差值 {max(metrics) - min(metrics)}）："
+        )
+    else:
+        lines.append("多条默认路由 metric 差异较大：")
+    for idx, r in enumerate(defaults, 1):
+        gw = getattr(r, "gateway", "") or "on-link"
+        iface = getattr(r, "interface", "") or "?"
+        m = r.metric if r.metric is not None else "?"
+        lines.append(f"  #{idx} via {gw} dev \"{iface}\" metric {m}")
+    return "\n".join(lines)
 
 
 # ==================== 代理规则 ====================
@@ -305,11 +356,11 @@ SYSTEM_RULES: List[Dict[str, Any]] = [
     },
     {
         "rule_id": "ROUTE-002",
-        "name": "默认路由metric过高",
+        "name": "多条默认路由metric差异大",
         "severity": Severity.INFO,
-        "confidence": 0.75,
-        "description": "默认路由Metric值过高",
-        "suggestion": "可适当降低Metric值以提高优先级",
+        "confidence": 0.70,
+        "description": "存在多条默认路由且跃点数差异明显，系统选路可能不符合预期",
+        "suggestion": "在「网络连接」中确认主用网卡，禁用不需要的网卡或调整接口跃点；与 ROUTE-001 一并排查",
         "evaluate_fn": _evaluate_route_002,
         "message_fn": _build_route_002_message,
     },

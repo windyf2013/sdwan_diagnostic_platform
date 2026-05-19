@@ -139,11 +139,15 @@ class FlowRuntime:
                         )
                         snapshots[step_id] = snapshot
                         if not continue_on_error:
+                            detail = str(result).strip()
+                            message = f"步骤 {step_id} 执行失败且未配置忽略错误"
+                            if detail:
+                                message = f"{message}: {detail}"
                             raise FlowError(
                                 error_code="FLOW_STEP_FAILED",
-                                message=f"步骤 {step_id} 执行失败且未配置忽略错误",
-                                trace_id=ctx.trace_id
-                            )
+                                message=message,
+                                trace_id=ctx.trace_id,
+                            ) from result
                     else:
                         # Snapshot already updated in _execute_step_with_snapshot
                         pass
@@ -156,7 +160,18 @@ class FlowRuntime:
             f"流程 {flow_def.id} 执行完成, 耗时: {total_duration_ms:.2f}ms",
             extra={"trace_id": ctx.trace_id}
         )
-        
+
+        expected_keys = flow_def.config.get("shared_context_keys")
+        if expected_keys and logger.isEnabledFor(logging.DEBUG):
+            missing = sorted(set(expected_keys) - set(ctx.metadata.keys()))
+            if missing:
+                logger.debug(
+                    "流程 %s 结束后仍未写入的 shared_context_keys: %s",
+                    flow_def.id,
+                    missing,
+                    extra={"trace_id": ctx.trace_id},
+                )
+
         return snapshots
 
     async def _execute_step_with_snapshot(
@@ -194,8 +209,11 @@ class FlowRuntime:
             snapshots[step_def.id] = snapshot
             
             logger.info(
-                f"步骤完成: {step_def.name} ({duration_ms:.2f}ms)",
-                extra={"trace_id": ctx.trace_id}
+                "步骤完成: step_id=%s name=%s duration_ms=%.0f trace_id=%s",
+                step_def.id,
+                step_def.name,
+                duration_ms,
+                ctx.trace_id,
             )
             return result
 

@@ -192,6 +192,7 @@ class RuleEngine:
                 evaluate_fn=rule["evaluate_fn"],
                 description=rule.get("description", ""),
                 suggestion=rule.get("suggestion", ""),
+                message_fn=rule.get("message_fn"),
             )
 
     @pure_function
@@ -209,6 +210,11 @@ class RuleEngine:
         for rule_def in self._rules:
             try:
                 triggered = rule_def["evaluate_fn"](ctx)
+                details: Dict[str, Any] = {}
+                if triggered:
+                    from sdwan_desktop.services.analyzer.rule_details import build_rule_details
+
+                    details = build_rule_details(rule_def["rule_id"], ctx)
 
                 rule_result = RuleResult(
                     rule_id=rule_def["rule_id"],
@@ -218,6 +224,7 @@ class RuleEngine:
                     confidence=rule_def["confidence"],
                     message=self._build_message(rule_def, ctx),
                     suggestion=rule_def["suggestion"],
+                    details=details,
                 )
                 result.results.append(rule_result)
 

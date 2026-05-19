@@ -56,7 +56,7 @@ QUICK_CHECK_FLOW = FlowDefinition(
     id="quick-check-v3",
     name="一键体检（精简版）",
     version="3.0.0",  # ✅ 版本号升级，反映域名集精简
-    description="Windows客户端基础配置检查与连通性分析（4核心域名+结果共享+快速体检）",
+    description="Windows客户端基础配置检查与连通性分析（精简域名集+结果共享+快速体检）",
     steps=[
         StepDefinition(
             id="step-collect",
@@ -74,11 +74,19 @@ QUICK_CHECK_FLOW = FlowDefinition(
             timeout_seconds=10
         ),
         StepDefinition(
+            id="step-dns",
+            name="DNS服务器探测",
+            description="对本机配置的 DNS 服务器做可达性探测（与网关步骤可并行）",
+            handler="connectivity.test_domestic_dns",
+            depends_on=["step-collect"],
+            timeout_seconds=30,
+        ),
+        StepDefinition(
             id="step-internet",
             name="互联网连通性测试",
             description="测试公网可达性（复用DNS解析结果）",
             handler="connectivity.test_internet_optimized",
-            depends_on=["step-gateway"],  # ✅ 调整：仅依赖网关测试
+            depends_on=["step-gateway", "step-dns"],
             timeout_seconds=30  # ✅ 优化：3个域名并发TCPing测试
         ),
         # ✅ 新增：连通性检查步骤，如果失败则标记跳过后续测试
@@ -89,14 +97,6 @@ QUICK_CHECK_FLOW = FlowDefinition(
             handler="flow_control.check_connectivity",
             depends_on=["step-gateway", "step-internet"],
             timeout_seconds=5
-        ),
-        StepDefinition(
-            id="step-dns-split",
-            name="DNS分流测试",
-            description="测试国内外DNS解析差异（复用DNS解析结果）",
-            handler="dns_split.test_optimized",
-            depends_on=["step-connectivity-check"],  # ✅ 依赖连通性检查
-            timeout_seconds=60  # ✅ 优化：3域名×2DNS，降低超时
         ),
         StepDefinition(
             id="step-cpe-link-routing",
@@ -111,7 +111,7 @@ QUICK_CHECK_FLOW = FlowDefinition(
             name="配置异常检测",
             description="执行诊断规则",
             handler="analyzer.analyze",
-            depends_on=["step-dns-split", "step-cpe-link-routing"],
+            depends_on=["step-cpe-link-routing"],
             timeout_seconds=10
         ),
         StepDefinition(
@@ -136,13 +136,17 @@ QUICK_CHECK_FLOW = FlowDefinition(
         "continue_on_error": True,
         "save_snapshots": True,
         "shared_context_keys": [
+            "system_snapshot",
+            "dns_results",
+            "gateway_ping_result",
+            "internet_connectivity_result",
             "dns_resolution_cache",      # DNS解析缓存
             "tcping_results_cache",      # TCPing结果缓存
             "traceroute_results_cache",  # Traceroute结果缓存
             "unified_domain_set",        # 统一域名集
             "test_mode",                 # 测试模式（quick）
-            "dns_split_result",          # ✅ DNS分流测试结果
-            "cpe_link_routing_result"    # ✅ CPE链路分流检测结果
+            "cpe_link_routing_result",   # CPE链路分流检测结果
+            "diagnosis_result",
         ]
     }
 )

@@ -324,6 +324,7 @@ class WindowsCollector:
                 entry = ArpEntry(
                     ip_address=raw.get("ip_address", ""),
                     mac_address=raw.get("mac_address", ""),
+                    interface=raw.get("interface", ""),
                 )
                 entries.append(entry)
             except Exception as e:

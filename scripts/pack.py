@@ -29,15 +29,20 @@ def create_portable_zip():
                 arcname = os.path.join(zip_name, os.path.relpath(file_path, dist_dir))
                 zipf.write(file_path, arcname)
                 
-        # 包含 configs 和 templates
-        for folder in ['configs', 'templates']:
-            folder_path = os.path.join(project_root, folder)
-            if os.path.exists(folder_path):
-                for root, dirs, files in os.walk(folder_path):
-                    for file in files:
-                        file_path = os.path.join(root, file)
-                        arcname = os.path.join(zip_name, os.path.relpath(file_path, project_root))
-                        zipf.write(file_path, arcname)
+        # 便携包附带 configs 与示例模板（与 build.py --add-data 对齐）
+        extra_dirs = [
+            os.path.join(project_root, "configs"),
+            os.path.join(project_root, "src", "sdwan_desktop", "reporting", "templates"),
+            os.path.join(project_root, "templates"),
+        ]
+        for folder_path in extra_dirs:
+            if not os.path.isdir(folder_path):
+                continue
+            for root, _dirs, files in os.walk(folder_path):
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    arcname = os.path.join(zip_name, os.path.relpath(file_path, project_root))
+                    zipf.write(file_path, arcname)
 
     print(f"Portable package created successfully: {output_zip}")
 

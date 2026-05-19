@@ -32,36 +32,53 @@ logger = logging.getLogger(__name__)
 @click.command()
 @click.argument("url")
 @click.option("--headless/--no-headless", default=True, help="是否使用无头模式运行浏览器")
-@click.option("--timeout", default=60, help="采集超时时间（秒）")
+@click.option("--timeout", default=90, help="采集超时时间（秒，默认 90）")
 @click.option("--output", "-o", default=None, help="报告输出路径")
-def waterfall(url: str, headless: bool, timeout: int, output: str):
+@click.option(
+    "--proxy",
+    default=None,
+    metavar="URL",
+    help="HTTP 代理（如 http://127.0.0.1:7890）；为空时按 HTTPS_PROXY/HTTP_PROXY 环境变量回退",
+)
+@click.option(
+    "--wait-until",
+    type=click.Choice(["load", "domcontentloaded", "networkidle"]),
+    default="load",
+    help="导航等待事件（默认 load；门户站常驻轮询会让 networkidle 整体超时）",
+)
+def waterfall(url: str, headless: bool, timeout: int, output: str, proxy: str, wait_until: str):
     """执行 Web 性能瀑布流分析
-    
+
     Args:
         url: 目标页面 URL
         headless: 是否隐藏浏览器窗口
         timeout: 超时时间
         output: 报告保存路径
+        proxy: HTTP 代理 URL（可选）
+        wait_until: Playwright 导航等待事件
     """
     print(f"[START] 开始对 {url} 进行性能分析...")
-    
+
     # 在事件循环中运行异步代码
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    
+
     try:
         # 1. HAR 采集
         har_tool = HarCaptureTool()
-        
+
         # 构造 ToolRequest 和 FlowContext
+        params: dict = {
+            "url": url,
+            "headless": headless,
+            "timeout": timeout * 1000,  # 转换为毫秒
+            "wait_until": wait_until,
+        }
+        if proxy:
+            params["proxy"] = proxy
         request = ToolRequest(
             tool_name="har_capture",
-            parameters={
-                "url": url,
-                "headless": headless,
-                "timeout": timeout * 1000,  # 转换为毫秒
-                "wait_until": "networkidle"
-            }
+            parameters=params,
         )
         ctx = FlowContext(flow_id="cli-waterfall", flow_name="cli-waterfall-diagnosis")
         
@@ -84,7 +101,7 @@ def waterfall(url: str, headless: bool, timeout: int, output: str):
         
         # 2. HAR 解析
         parser = HarParser()
-        waterfall_result = parser.parse(har_path)
+        waterfall_result = parser.parse(har_path, target_url=url)
         print(f"[OK] 解析完成: {waterfall_result.total_requests} 个资源, 总耗时 {waterfall_result.page_load_time:.0f}ms")
         
         # 3. 性能规则匹配

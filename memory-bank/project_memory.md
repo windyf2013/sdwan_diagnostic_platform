@@ -1,21 +1,15 @@
-## 持久化记忆规则 (Memory Bank)
+## Memory Bank（L1/L2）
 
-本项目根目录下的 `memory-bank/` 文件夹用于存储 AI 的上下文记忆。
-AI 在完成**每一轮显著的功能开发或 Bug 修复后**，必须自动执行以下操作：
+| 文件 | 用途 |
+|------|------|
+| `INDEX.md` | **改码闸门**（≤80 行）：冲刺、`current_flow`、文件映射 |
+| `changelog.md` | 历史变更（冷） |
+| `progress.md` | 里程碑；**不要**每轮编码前读 |
+| `test_map.yaml` | DoD：src 前缀 → pytest 目录 |
 
-1.  **读取** `memory-bank/progress.md` 了解历史进度。
-2.  **更新** `memory-bank/progress.md`，记录**已完成**的工作和**下一步**计划。
-3.  **更新** `memory-bank/activeContext.md`，记录当前最新的技术决策、API 变更或待解决问题。
-4.  **必须使用** `write_to_file` 工具执行写入操作。
+## 更新触发
 
-Memory Bank 文件结构：
-- `productBrief.md`: 项目愿景、核心功能、目标用户。
-- `techContext.md`: 所用技术栈、数据库表结构、关键配置。
-- `systemPatterns.md`: 代码架构模式、关键组件关系。
-- `activeContext.md`: **当前冲刺**的目标、最近变更的摘要。
-- `progress.md`: **已完成**的功能清单、**当前状态**、**已知问题**。
+- 用户 `/update-memory`、或「提交前 / 今天先到这」
+- DoD 完成后：更新 `INDEX` 焦点一行 + `changelog` 一条；里程碑才改 `progress`
 
-## 记忆更新触发条件
-
-- 当用户输入 `/update-memory` 时，强制执行 Memory Bank 更新流程。
-- 当用户说 "提交代码前" 或 "今天先到这" 时，**建议**先执行 Memory Bank 更新。
+**不要**再更新本文件以外的 `activeContext.md` 正文（已退役）。

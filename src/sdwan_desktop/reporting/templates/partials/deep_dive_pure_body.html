@@ -1,0 +1,445 @@
+{# 纯深度诊断报告正文（业务联合见 deep_dive_joint_ux.html） #}
+{% import "partials/topology_cartoon.html" as topoc %}
+{% set _bj_suppress = false %}
+{% set _ddo = topology.get('report_deep_dive_outcome') if topology else none %}
+
+<div class="header">
+    <h1>SD-WAN 深度诊断报告</h1>
+    <div class="meta-info">
+        <div class="meta-item">
+            <div class="meta-label">报告 ID</div>
+            <div class="meta-value">{{ report_id }}</div>
+        </div>
+        <div class="meta-item">
+            <div class="meta-label">Trace ID</div>
+            <div class="meta-value">{{ trace_id }}</div>
+        </div>
+        <div class="meta-item">
+            <div class="meta-label">生成时间</div>
+            <div class="meta-value">{{ generated_at }}</div>
+        </div>
+        <div class="meta-item">
+            <div class="meta-label">诊断类型</div>
+            <div class="meta-value">{{ diagnosis_type }}</div>
+        </div>
+        <div class="meta-item">
+            <div class="meta-label">规则版本</div>
+            <div class="meta-value">{{ rule_version }}</div>
+        </div>
+        {% if business_probes and business_probes|length > 0 %}
+        <div class="meta-item">
+            <div class="meta-label">拓扑后探测</div>
+            <div class="meta-value">{{ probe_status | default('unknown') }}</div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<div class="quick-nav">
+    <span class="quick-nav-title">快速导航:</span>
+    <a href="#summary" class="nav-chip">摘要</a>
+    {% if root_causes and root_causes|length > 0 %}
+    <a href="#root-causes" class="nav-chip critical">根因 ({{ root_causes|length }})</a>
+    {% else %}
+    <a href="#root-causes" class="nav-chip">根因</a>
+    {% endif %}
+    {% if business_probes and business_probes|length > 0 %}
+    <a href="#probes" class="nav-chip">探测明细</a>
+    {% endif %}
+    <a href="#topology" class="nav-chip">网络拓扑</a>
+    {% if topology is defined and topology and topology.commercial_delivery %}
+    <a href="#delivery" class="nav-chip">交付摘要</a>
+    {% endif %}
+    <a href="#evidence-chain" class="nav-chip">证据链</a>
+    {% if report_pack is defined and report_pack %}
+    <a href="#report-product-scope" class="nav-chip">报告定位</a>
+    {% endif %}
+</div>
+
+<div class="section" id="summary">
+    <div class="section-header"><h2>摘要</h2></div>
+    <div class="section-content">
+        <p><strong>严重级别:</strong> {{ severity.value }}</p>
+        <p><strong>置信度:</strong> {{ confidence }}%</p>
+        <p>{{ summary }}</p>
+
+        {% if _ddo %}
+        <div id="report-deep-dive-outcome" class="report-deep-hero report-deep-hero--{{ severity.value }}">
+            <div class="report-deep-hero-bar">
+                <span class="report-deep-verdict">专检结论{% if _ddo.verdict %} · {{ _ddo.verdict }}{% endif %}</span>
+                <span class="severity-badge severity-{{ severity.value }}">{{ severity.value | upper }}</span>
+            </div>
+            <dl class="report-deep-dl">
+                {% if _ddo.phenomenon %}
+                <div class="report-deep-row">
+                    <dt>{% if _ddo.has_business_probes %}探测现象{% else %}专检现象{% endif %}</dt>
+                    <dd>{{ _ddo.phenomenon }}</dd>
+                </div>
+                {% endif %}
+                <div class="report-deep-row{% if _ddo.primary_fault %} report-deep-row--fault{% endif %}">
+                    <dt>主故障判断</dt>
+                    <dd>
+                        {% if _ddo.primary_fault %}
+                        <strong class="report-deep-primary-fault">{{ _ddo.primary_fault }}</strong>
+                        {% else %}
+                        <span class="report-deep-muted">无（未发现需处置的主故障项）</span>
+                        {% endif %}
+                    </dd>
+                </div>
+                {% if _ddo.ruled_out and _ddo.ruled_out|length > 0 %}
+                <div class="report-deep-row">
+                    <dt>已排除（弱否定）</dt>
+                    <dd>
+                        <ul class="report-deep-ruled-out">
+                            {% for it in _ddo.ruled_out %}
+                            <li>{{ it }}</li>
+                            {% endfor %}
+                        </ul>
+                    </dd>
+                </div>
+                {% endif %}
+            </dl>
+            {% if _ddo.primary_narrative %}
+            <p class="report-deep-narrative">{{ _ddo.primary_narrative }}</p>
+            {% endif %}
+            {% if _ddo.secondary_findings and _ddo.secondary_findings|length > 0 %}
+            <details class="report-deep-secondary-details">
+                <summary>待核对项（非主因，{{ _ddo.secondary_findings|length }} 条）</summary>
+                <ul class="report-deep-secondary-list">
+                    {% for f in _ddo.secondary_findings %}
+                    <li>
+                        <strong>[{{ f.id }}]</strong> {{ f.label }}
+                        <div class="report-deep-secondary-note">{{ f.note }}</div>
+                    </li>
+                    {% endfor %}
+                </ul>
+            </details>
+            {% endif %}
+            {% if _ddo.has_business_probes and _ddo.targets_line %}
+            <details class="report-deep-tech-details">
+                <summary>展开探测摘要（目标 / 方法 / 整体结果）</summary>
+                <dl class="report-deep-dl report-deep-dl--tech">
+                    <div class="report-deep-row">
+                        <dt>探测目标</dt>
+                        <dd>{{ _ddo.targets_line }}</dd>
+                    </div>
+                    <div class="report-deep-row">
+                        <dt>探测方法</dt>
+                        <dd>{{ _ddo.methods_line }}</dd>
+                    </div>
+                    <div class="report-deep-row">
+                        <dt>整体结果</dt>
+                        <dd>
+                            <span class="report-deep-probe-result report-deep-probe-result--{{ _ddo.overall }}">{{ _ddo.result_line }}</span>
+                        </dd>
+                    </div>
+                </dl>
+            </details>
+            {% endif %}
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+{% if root_causes and root_causes|length > 0 %}
+<div class="section" id="root-causes">
+    <div class="section-header"><h2>根因分析</h2></div>
+    <div class="section-content">
+        {% for cause in root_causes %}
+        <div class="cause-card" style="margin-bottom: 16px; padding: 16px; background: var(--bg-white); border-radius: var(--radius-md); border: 1px solid var(--border-color); border-left: 4px solid {% if cause.severity.value == 'critical' %}var(--color-critical){% elif cause.severity.value == 'error' %}var(--color-error){% else %}var(--color-warning){% endif %};">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;">
+                <div style="font-weight: 600;">{{ cause.title }}</div>
+                <span class="severity-badge severity-{{ cause.severity.value }}">{{ cause.severity.value | upper }}</span>
+            </div>
+            <div class="font-mono" style="font-size: 0.85em; color: var(--text-secondary); margin-top: 4px;">{{ cause.cause_id }}</div>
+            <p style="margin-top: 8px;">{{ cause.description }}</p>
+            <p style="margin-top: 8px; font-size: 0.88em; color: var(--text-secondary);">
+                置信度 {{ "%.0f"|format(cause.confidence * 100) }}%
+                {% if cause.matched_rules %} · 规则 {{ cause.matched_rules | join(', ') }}{% endif %}
+            </p>
+            {% if cause.evidence_refs %}
+            <p style="margin-top: 6px; font-size: 0.82em;" class="font-mono">{{ cause.evidence_refs | join(' · ') }}</p>
+            {% endif %}
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% else %}
+<div class="section" id="root-causes">
+    <div class="section-header"><h2>根因分析</h2></div>
+    <div class="section-content">
+        <div class="summary-box success">
+            <p>未检测到明显的配置或连通性故障。</p>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+{% if business_probes and business_probes|length > 0 %}
+<div class="section" id="probes">
+    <div class="section-header"><h2>探测明细（DNS A + TCP + Traceroute）</h2></div>
+    <div class="section-content">
+        <table style="width: 100%; border-collapse: collapse; font-size: 0.95em;">
+            <thead>
+                <tr style="text-align: left; border-bottom: 1px solid var(--border-color);">
+                    <th style="padding: 8px;">域名</th>
+                    <th style="padding: 8px;">端口</th>
+                    <th style="padding: 8px;">DNS</th>
+                    <th style="padding: 8px;">TCP</th>
+                    <th style="padding: 8px;">Traceroute</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in business_probes %}
+                <tr style="vertical-align: top; border-bottom: 1px solid var(--border-color);">
+                    <td style="padding: 8px;" class="font-mono">{{ row.domain }}</td>
+                    <td style="padding: 8px;">{{ row.port }}</td>
+                    <td style="padding: 8px;">
+                        {% set d = row.dns %}
+                        <span>{{ d.status }}</span>
+                        {% if d.data and d.data.resolved_ips %}
+                        <div class="font-mono" style="margin-top: 4px;">{{ d.data.resolved_ips | join(', ') }}</div>
+                        {% endif %}
+                        {% if d.error %}<div style="color: var(--color-error); margin-top: 4px;">{{ d.error }}</div>{% endif %}
+                    </td>
+                    <td style="padding: 8px;">
+                        {% for t in row.tcp %}
+                        <div style="margin-bottom: 6px;">
+                            <span class="font-mono">{{ t.host }}:{{ t.port }}</span>
+                            <span>{{ t.status }}</span>
+                            {% if t.data %}
+                            <span style="opacity: 0.85;">(open={{ t.data.port_open }})</span>
+                            {% endif %}
+                            {% if t.error %}<div style="color: var(--color-error); font-size: 0.9em;">{{ t.error }}</div>{% endif %}
+                        </div>
+                        {% else %}
+                        <span style="opacity: 0.7;">-</span>
+                        {% endfor %}
+                    </td>
+                    <td style="padding: 8px; font-size: 0.92em;">
+                        {% for tr in row.trace|default([]) %}
+                        <div style="margin-bottom: 8px;">
+                            <span class="font-mono">{{ tr.host }}</span>
+                            <span>{{ tr.status }}</span>
+                            {% if tr.data and tr.data.summary %}
+                            <div style="margin-top: 2px; opacity: 0.9;">
+                                hops={{ tr.data.summary.total_hops }}
+                                reached={{ tr.data.summary.target_reached }}
+                                {% if tr.data.summary.last_hop_ip %}last={{ tr.data.summary.last_hop_ip }}{% endif %}
+                            </div>
+                            {% endif %}
+                            {% if tr.error %}<div style="color: var(--color-error); font-size: 0.9em;">{{ tr.error }}</div>{% endif %}
+                            {% if tr.data and tr.data.hops and tr.data.hops|length > 0 %}
+                            <details style="margin-top: 4px;">
+                                <summary style="cursor: pointer;">跳明细</summary>
+                                <pre style="max-height: 200px; overflow: auto; font-size: 0.82em; margin-top: 4px;">{{ tr.data.hops | tojson(indent=2) }}</pre>
+                            </details>
+                            {% endif %}
+                        </div>
+                        {% else %}
+                        <span style="opacity: 0.7;">-</span>
+                        {% endfor %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+
+<div class="section" id="topology">
+    <div class="section-header"><h2>网络拓扑结构</h2></div>
+    <div class="section-content">
+        {% set _lod_ph = topology.layout_overlay_placeholder | default('', true) if topology else '' %}
+        {% set _topo_uncertain = ((_lod_ph | string | trim) | length > 0) %}
+        <div id="topology-container" class="topology-strip-wrap topology-ref-stage">
+            {% if topology and topology.get('topology_presentation_note') %}
+            <p class="topology-ref-underlay-hint" style="margin: 0 0 12px;">{{ topology.get('topology_presentation_note') }}</p>
+            {% endif %}
+            {% set uitems = topology.layout_underlay_items | default([], true) if topology else [] %}
+            {% if (uitems | length) > 0 %}
+            <div class="topology-ref-layer-title">Underlay（公网 / 物理可达）</div>
+            <div class="topology-flow">
+                {% for item in uitems %}
+                    {% if item.kind == 'node' %}
+                        {{ topoc.cartoon_underlay_node(item.node, topology) }}
+                    {% elif item.kind == 'hop' %}
+                        {% set hop_conn = item.connection | default('indirect') %}
+                        {% set _hop_title = '本段判定为不可达 / 故障路径' if item.problem else ('直连段' if hop_conn == 'direct' else '经路由或隧道域（示意）') %}
+                        {{ topoc.cartoon_connector(hop_conn, item.problem, _hop_title) }}
+                    {% endif %}
+                {% endfor %}
+            </div>
+            {% elif topology and (topology.layout_underlay_nodes | default([], true)) | length > 0 %}
+            <div class="topology-ref-layer-title">Underlay（公网 / 物理可达）</div>
+            <div class="topology-flow">
+                {% for node in topology.layout_underlay_nodes | default([], true) %}
+                {{ topoc.cartoon_underlay_node(node, topology) }}
+                {% if not loop.last %}
+                {% set _next_ul = topology.layout_underlay_nodes[loop.index0 + 1] %}
+                {% set _prob_ul = topology.problem_node_ids is defined and topology.problem_node_ids and (_next_ul.id in topology.problem_node_ids) %}
+                {{ topoc.cartoon_connector('indirect', _prob_ul, '本段判定为不可达 / 故障路径' if _prob_ul else '逻辑路径') }}
+                {% endif %}
+                {% endfor %}
+            </div>
+            {% elif topology and topology.nodes %}
+            <div class="topology-ref-layer-title">Underlay（公网 / 物理可达）</div>
+            <div class="topology-flow">
+                {% for node in topology.nodes %}
+                {{ topoc.cartoon_underlay_node(node, topology) }}
+                {% if not loop.last %}
+                {% set _next_nd = topology.nodes[loop.index0 + 1] %}
+                {% set _prob_nd = topology.problem_node_ids is defined and topology.problem_node_ids and (_next_nd.id in topology.problem_node_ids) %}
+                {{ topoc.cartoon_connector('indirect', _prob_nd, '本段判定为不可达 / 故障路径' if _prob_nd else '逻辑路径') }}
+                {% endif %}
+                {% endfor %}
+            </div>
+            {% else %}
+            <div style="color: var(--text-secondary); text-align:center;">暂无可展示的拓扑节点</div>
+            {% endif %}
+            {% if _topo_uncertain or (topology and topology.get('topology_underlay_trimmed')) %}
+            <p class="topology-ref-underlay-hint">{% if _topo_uncertain %}节点间为路径示意；连接符表示逻辑可达（非物理线缆）。{% endif %}{% if topology and topology.get('topology_underlay_trimmed') %}{% if _topo_uncertain %}<br/>{% endif %}已按首轮失败点裁剪路径示意。{% endif %}</p>
+            {% endif %}
+
+            {% if topology %}
+            <div class="topology-ref-overlay-band">
+                <div class="topology-ref-layer-title topology-ref-layer-title--overlay">Overlay（隧道内层 / 设备侧）</div>
+                {% if topology.layout_overlay | default(none) %}
+                <div class="topology-flow topology-flow-overlay">
+                    {{ topoc.cartoon_overlay_cpe(topology) }}
+                    {{ topoc.cartoon_overlay_tunnel_curve(topology.overlay_problem) }}
+                    {{ topoc.cartoon_overlay_hub(topology) }}
+                </div>
+                {% if topology.overlay_problem %}
+                <div class="topology-overlay-problem">Overlay 故障段：{{ topology.overlay_problem.layer }} · {{ topology.overlay_problem.reason }}</div>
+                {% endif %}
+                {% elif topology.layout_overlay_placeholder %}
+                <div class="topology-placeholder">{{ topology.layout_overlay_placeholder }}</div>
+                {% else %}
+                <div class="topology-placeholder">暂无 Overlay 示意数据。</div>
+                {% endif %}
+            </div>
+            {% endif %}
+
+            {% if topology %}
+            {% include "partials/topology_detail_tables.html" %}
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+{% if topology and topology.commercial_delivery is defined and topology.commercial_delivery %}
+{% set cd = topology.commercial_delivery %}
+<div class="section" id="delivery">
+    <div class="section-header"><h2>交付摘要（阅读层）</h2></div>
+    <div class="section-content">
+        <div class="info-box info" style="margin-bottom: 14px;">
+            <div class="info-box-title">主叙述</div>
+            <div class="info-box-content">
+                <p style="margin: 6px 0; line-height: 1.55;">{{ cd.headline }}</p>
+                <p style="margin: 10px 0 0; font-size: 0.92em; color: #555;">{{ cd.subline }}</p>
+            </div>
+        </div>
+        {% if cd.checklist %}
+        <table style="width: 100%; border-collapse: collapse; font-size: 0.9em; margin-bottom: 14px;">
+            <thead>
+                <tr style="border-bottom: 1px solid #ccc;">
+                    <th style="text-align: left; padding: 6px 8px;">项</th>
+                    <th style="text-align: left; padding: 6px 8px;">结论</th>
+                    <th style="text-align: left; padding: 6px 8px;">说明</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in cd.checklist %}
+                <tr style="border-bottom: 1px solid #eee;">
+                    <td style="padding: 6px 8px;"><span class="font-mono">{{ row.id }}</span> {{ row.label }}</td>
+                    <td style="padding: 6px 8px;">{{ row.status }}</td>
+                    <td style="padding: 6px 8px;">{{ row.detail }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% endif %}
+        {% if cd.recommended_actions and cd.recommended_actions|length > 0 %}
+        <div class="info-box info">
+            <div class="info-box-title">建议动作</div>
+            <ol style="margin: 0; padding-left: 1.2em;">
+                {% for a in cd.recommended_actions %}
+                <li style="margin: 6px 0;">{{ a }}</li>
+                {% endfor %}
+            </ol>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endif %}
+
+<div class="section" id="evidence-chain">
+    <div class="section-header collapsible collapsed">
+        <h2>证据链与明细</h2>
+    </div>
+    <div class="section-content collapse-content hidden">
+        {% if topology and topology.hints %}
+        <div class="info-box info">
+            <div class="info-box-title">关键信息（CPE）</div>
+            <ul style="margin: 0; padding-left: 1.2em;">
+                {% for line in topology.hints %}
+                <li style="margin: 4px 0;">{{ line }}</li>
+                {% endfor %}
+            </ul>
+        </div>
+        {% endif %}
+        {% if topology and topology.overlay_policy_flow is defined and topology.overlay_policy_flow %}
+        {% set opf = topology.overlay_policy_flow %}
+        {% set opd = opf.data if opf.data is mapping else {} %}
+        <div class="info-box info" style="margin-top: 12px;">
+            <div class="info-box-title">Overlay 与策略分流</div>
+            <div class="info-box-content">
+                <p><strong>状态:</strong> {{ opf.status }}{% if opf.error %} · {{ opf.error }}{% endif %}</p>
+                {% if opd.scenario_label %}<p><strong>组网:</strong> {{ opd.scenario_label }}</p>{% endif %}
+                {% if opd.checklist %}
+                <ul style="margin: 8px 0 0; padding-left: 1.2em;">
+                    {% for line in opd.checklist %}
+                    <li>{{ line }}</li>
+                    {% endfor %}
+                </ul>
+                {% endif %}
+            </div>
+        </div>
+        {% endif %}
+        {% if topology and topology.get('pc_snapshot') %}
+        {% set pcs = topology.pc_snapshot %}
+        <div class="info-box info" style="margin-top: 12px;">
+            <div class="info-box-title">PC 快照</div>
+            <pre style="max-height: 360px; overflow: auto; font-size: 0.82em; background: var(--bg-light); padding: 12px; border-radius: var(--radius-sm);">{{ pcs | tojson(indent=2) if pcs is mapping else pcs }}</pre>
+        </div>
+        {% elif topology and topology.pc_snapshot_included is defined %}
+        <div class="info-box warning" style="margin-top: 12px;">
+            <div class="info-box-content">{% if topology.pc_snapshot_included %}已纳入 PC 快照但本报告未携带明细。{% else %}未采集 PC 快照。{% endif %}</div>
+        </div>
+        {% endif %}
+        {% if topology and topology.get('targeted_probe') %}
+        {% set tp = topology.targeted_probe %}
+        <div class="info-box info" style="margin-top: 12px;">
+            <div class="info-box-title">拓扑后主动探测（原始）</div>
+            <p style="margin: 4px 0;"><strong>状态:</strong> {{ tp.status }}</p>
+            {% if tp.data is mapping and tp.data.get('raw_outputs') %}
+            <details style="margin-top: 8px;">
+                <summary style="cursor: pointer;">原始命令输出</summary>
+                <pre style="margin-top: 8px; max-height: 320px; overflow: auto; font-size: 0.85em;">{% for k, v in tp.data.raw_outputs.items() %}===== {{ k }} =====
+{{ v }}
+
+{% endfor %}</pre>
+            </details>
+            {% endif %}
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+{% include "partials/report_product_header.html" %}
+
+<div style="text-align: center; color: var(--text-muted); font-size: 0.85em; margin-top: 40px; padding: 25px; border-top: 1px solid var(--border-color);">
+    <p>SD-WAN 桌面诊断专家 v1.0.0 | 报告生成于 {{ generated_at }}</p>
+</div>

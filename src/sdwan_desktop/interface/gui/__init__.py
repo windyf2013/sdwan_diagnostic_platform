@@ -1,19 +1,23 @@
-import sys
-import os
+"""GUI 包：延迟加载 ``MainWindow``，避免 ``import sdwan_desktop.interface.gui.*`` 时强制依赖 PySide6。"""
 
-# 修复 PyInstaller 打包后的相对导入问题
-if getattr(sys, 'frozen', False):
-    # 如果是打包后的 exe，将可执行文件所在目录加入路径
-    application_path = os.path.dirname(sys.executable)
-else:
-    # 如果是直接运行 python 脚本
-    application_path = os.path.dirname(os.path.abspath(__file__))
+from __future__ import annotations
 
-# 确保 src 目录在 sys.path 中
-src_path = os.path.join(os.path.dirname(application_path), 'src')
-if src_path not in sys.path:
-    sys.path.insert(0, src_path)
-
-from .main_window import MainWindow, main
+from typing import TYPE_CHECKING, Any
 
 __all__ = ["MainWindow", "main"]
+
+
+def __getattr__(name: str) -> Any:
+    if name == "MainWindow":
+        from sdwan_desktop.interface.gui.main_window import MainWindow
+
+        return MainWindow
+    if name == "main":
+        from sdwan_desktop.interface.gui.main_window import main
+
+        return main
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+if TYPE_CHECKING:
+    from sdwan_desktop.interface.gui.main_window import MainWindow, main

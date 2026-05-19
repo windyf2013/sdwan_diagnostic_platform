@@ -59,6 +59,7 @@ pip install -e ".[dev]"
 ## 📖 使用文档
 
 - **[用户手册 (User Guide)](docs/user_guide.md)**: 详细的安装指南、功能说明及常见问题解答。
+- **[功能设计（含三命令对比与证据层级）](spec/detail_function_design.md)**（见章节「〇」）。
 - **[开发指南 (Developer Guide)](docs/developer_guide.md)**: 架构说明、扩展开发教程及发布流程。
 - **[API 参考 (API Reference)](docs/api_reference.md)**: 核心数据契约与接口定义。
 
@@ -71,6 +72,12 @@ pip install -e ".[dev]"
 3. **Service Layer** - 业务逻辑层 (Collector, Analyzer, Reporter)
 4. **Tool Layer** - 工具抽象层 (Registry & Adapters)
 5. **Core Layer** - 核心数据契约 (Data Contracts)
+
+## 🤖 与 Cursor Agent 协作
+
+1. 用本目录 **`sdwan_diagnostic_platform`** 作为 Cursor 工作区根（否则 Project Rules 不加载）。
+2. 日常任务复制提示词：[`docs/prompts/DAILY_PROMPTS.md`](docs/prompts/DAILY_PROMPTS.md)（新增需求 A1–A4、排障 B1–B4）。
+3. 改码闸门与 `current_flow`：[`memory-bank/INDEX.md`](memory-bank/INDEX.md)。
 
 ## 🤝 贡献指南
 

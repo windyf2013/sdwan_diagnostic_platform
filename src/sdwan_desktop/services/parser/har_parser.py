@@ -21,13 +21,19 @@ class HarParser:
     """
 
     @service_function
-    def parse(self, har_file_path: str, trace_id: str = "") -> WaterfallResult:
+    def parse(
+        self,
+        har_file_path: str,
+        trace_id: str = "",
+        target_url: str = "",
+    ) -> WaterfallResult:
         """解析HAR文件
-        
+
         Args:
             har_file_path: HAR文件路径
             trace_id: 追踪ID
-            
+            target_url: 调用方已知的目标页面 URL（建议传入；为空时按 HAR 内容回退推断）。
+
         Returns:
             WaterfallResult: 解析后的瀑布流结果
         """
@@ -66,19 +72,47 @@ class HarParser:
             logger.info("域名分布:")
             for domain, count in sorted(domain_stats.items(), key=lambda x: x[1], reverse=True):
                 logger.info(f"  {domain}: {count} 个请求")
-            
+
+            resolved_target_url = self._resolve_target_url(target_url, log, resources)
+
             result = WaterfallResult(
-                target_url=log.get("pages", [{}])[0].get("startedDateTime", ""),
+                target_url=resolved_target_url,
                 resources=resources,
                 trace_id=trace_id
             )
-            
+
             result.calculate_stats()
             return result
 
         except Exception as e:
             logger.error(f"Failed to parse HAR file {har_file_path}: {str(e)}")
             raise
+
+    @staticmethod
+    def _resolve_target_url(
+        explicit_url: str,
+        log: Dict[str, Any],
+        resources: List[ResourceTiming],
+    ) -> str:
+        """按优先级推断报告标题展示用的目标 URL。
+
+        优先级：
+            1. 调用方显式传入的 ``target_url``（CLI/GUI 已知的导航 URL）；
+            2. HAR ``log.pages[0].title``（浏览器解析后的页面标题，并非 URL，但比时间戳可读）——
+               注意 ``record_har_mode="full"`` 下导航失败时 title 通常为空，跳过；
+            3. ``log.entries[0].request.url``（首个 HTTP 请求即导航请求）；
+            4. 回退到 ``log.pages[0].startedDateTime``（历史行为，便于兼容旧报告头部展示）。
+        """
+        if explicit_url and explicit_url.strip():
+            return explicit_url.strip()
+        if resources:
+            first_url = resources[0].url
+            if first_url:
+                return first_url
+        pages = log.get("pages") or []
+        if pages and isinstance(pages[0], dict):
+            return pages[0].get("startedDateTime", "")
+        return ""
 
     def _parse_entry(self, entry: Dict[str, Any]) -> ResourceTiming:
         """解析单个HAR条目

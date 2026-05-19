@@ -57,24 +57,24 @@ class QuickCheckAnalyzer:
         system_snapshot = ctx.get("system_snapshot")
         gateway_ping = ctx.get("gateway_ping_result")
         dns_results = ctx.get("dns_results") or []
-        domestic_conn = ctx.get("domestic_connectivity") or []
-        international_conn = ctx.get("international_connectivity") or []
+        internet_result = ctx.get("internet_connectivity_result")
+        if internet_result is not None:
+            domestic_conn = getattr(internet_result, "domestic_target_results", None) or []
+            international_conn = getattr(internet_result, "international_target_results", None) or []
+        else:
+            # 兼容旧上下文键名
+            domestic_conn = ctx.get("domestic_connectivity") or []
+            international_conn = ctx.get("international_connectivity") or []
         
-        # DNS分流结果空值处理
-        dns_split = ctx.get("dns_split_result")
-        if dns_split is None:
-            logger.warning(
-                "DNS分流测试结果为None，使用默认空结果",
-                extra={"trace_id": ctx.trace_id}
-            )
-            dns_split = DnsSplitTestResult(
-                domain_results=[],
-                split_domains=[],
-                split_count=0,
-                total_domains=0
-            )
-        
-        # ✅ CPE链路分流结果空值处理（新增）
+        # 一键体检流程已移除 DNS 一致性测试，规则上下文保留空结果以兼容 SPLIT-001
+        dns_split = DnsSplitTestResult(
+            domain_results=[],
+            split_domains=[],
+            split_count=0,
+            total_domains=0,
+        )
+
+        # CPE链路分流结果空值处理
         cpe_link_routing = ctx.get("cpe_link_routing_result")
         if cpe_link_routing is None:
             logger.debug(
@@ -147,8 +147,7 @@ class QuickCheckAnalyzer:
             probe_results=all_probes,
             config_snapshots={
                 "system_snapshot": system_snapshot,
-                "dns_split_result": dns_split,
-                "cpe_link_routing_result": cpe_link_routing,  # ✅ 新增：添加CPE链路分流结果
+                "cpe_link_routing_result": cpe_link_routing,
             }
         )
         ctx.set("evidence_connectivity", evidence)

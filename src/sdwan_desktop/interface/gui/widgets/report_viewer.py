@@ -1,9 +1,13 @@
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Optional, Union
+
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QFileDialog, QLabel, QProgressBar
+    QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QFileDialog, QProgressBar
 )
 from PySide6.QtWebEngineWidgets import QWebEngineView
-from PySide6.QtCore import QUrl, QThread, Signal
-import os
+from PySide6.QtCore import QThread, Signal
 
 
 class ReportLoader(QThread):
@@ -57,16 +61,19 @@ class ReportViewer(QWidget):
         
         self.setLayout(layout)
 
+    def load_from_path(self, file_path: Union[str, Path]) -> None:
+        """从磁盘加载 HTML 报告到内嵌浏览器。"""
+        path = str(file_path)
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setValue(0)
+        self.loader = ReportLoader(path)
+        self.loader.finished.connect(self.on_report_loaded)
+        self.loader.start()
+
     def on_open_report(self):
         file_path, _ = QFileDialog.getOpenFileName(self, "打开报告", "", "HTML Files (*.html);;All Files (*)")
         if file_path:
-            self.progress_bar.setVisible(True)
-            self.progress_bar.setValue(0)
-            
-            # 启动后台加载线程
-            self.loader = ReportLoader(file_path)
-            self.loader.finished.connect(self.on_report_loaded)
-            self.loader.start()
+            self.load_from_path(file_path)
 
     def on_report_loaded(self, html_content):
         """报告加载完成后的处理"""

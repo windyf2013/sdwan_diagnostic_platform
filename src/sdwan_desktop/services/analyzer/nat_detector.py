@@ -50,8 +50,13 @@ class NatDetector:
             causes.append(RootCause(
                 cause_id="CPE-004",
                 title="NAT 不匹配",
-                description=f"PC 源地址 {pc_ip} 未匹配到任何 CPE NAT 规则，流量可能被丢弃或无法正确返回。",
-                severity=Severity.ERROR,
+                description=(
+                    f"PC 快照主地址 {pc_ip} 未匹配到任何已解析的 CPE NAT inside 规则（静态启发式）。"
+                    " 若路径为 PC→上游路由/NAT→CPE，业务在 CPE 上常见不到 PC 私网源，"
+                    "nf_conntrack 亦不应期望出现 PC 源；请用 CPE 外向会话源与上游 WAN 对照，"
+                    "勿仅凭「未见 PC 源会话」断言本机 NAT 失效。"
+                ),
+                severity=Severity.WARNING,
                 confidence=0.80,
                 evidence_refs=[topology.pc_node_id, topology.cpe_node_id],
                 matched_rules=["NAT-MATCHING-CHECK"],

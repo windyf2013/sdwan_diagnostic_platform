@@ -21,16 +21,25 @@ logger = logging.getLogger(__name__)
 @tool_function(
     name="har_capture",
     description="使用Playwright录制网页访问的HAR文件，用于性能分析",
-    timeout=120,
+    timeout=180,
     retry_count=0,
     input_schema={
         "type": "object",
         "properties": {
             "url": {"type": "string", "description": "目标URL"},
             "headless": {"type": "boolean", "default": True, "description": "是否无头模式"},
-            "timeout": {"type": "integer", "default": 60000, "description": "页面加载超时时间(ms)"},
-            "wait_until": {"type": "string", "enum": ["load", "domcontentloaded", "networkidle"], "default": "networkidle"},
+            "timeout": {"type": "integer", "default": 90000, "description": "页面加载超时时间(ms)"},
+            "wait_until": {
+                "type": "string",
+                "enum": ["load", "domcontentloaded", "networkidle"],
+                "default": "load",
+                "description": "默认 load：门户站常驻轮询会让 networkidle 整体超时；load 命中后内部仍会再尝试 networkidle/固定等待",
+            },
             "output_dir": {"type": "string", "description": "输出目录，默认为当前工作目录下的har_output"},
+            "proxy": {
+                "type": "string",
+                "description": "代理 URL（如 http://127.0.0.1:7890）；为空时按 HTTPS_PROXY/HTTP_PROXY 环境变量回退",
+            },
         },
         "required": ["url"],
     },
@@ -64,9 +73,10 @@ class HarCaptureTool:
         params = request.parameters
         url = params.get("url")
         headless = params.get("headless", True)
-        page_timeout = params.get("timeout", 60000)
-        wait_until = params.get("wait_until", "networkidle")
+        page_timeout = params.get("timeout", 90000)
+        wait_until = params.get("wait_until", "load")
         output_dir = params.get("output_dir", os.path.join(os.getcwd(), "har_output"))
+        proxy = params.get("proxy")
 
         if not url:
             return ToolResponse(
@@ -82,7 +92,7 @@ class HarCaptureTool:
         start_time = asyncio.get_event_loop().time()
 
         try:
-            await adapter.initialize(headless=headless)
+            await adapter.initialize(headless=headless, proxy=proxy)
             
             # 确保输出目录存在
             os.makedirs(output_dir, exist_ok=True)

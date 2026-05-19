@@ -69,10 +69,10 @@ def test_cli_deep_dive_basic():
         
         # 运行命令（模拟提供密码等参数）
         result = runner.invoke(deep_dive, [
-            '--host', '192.168.1.1',
+            '--cpe-host', '192.168.1.1',
             '--username', 'admin',
             '--password', 'secret',
-            '--output', 'test_dd_report.html'
+            '--output', 'test_dd_report.html',
         ])
         
         # 验证命令没有因为参数缺失而崩溃

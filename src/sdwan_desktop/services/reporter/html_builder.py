@@ -6,16 +6,24 @@ HTML 报告生成器
 """
 
 import logging
-from datetime import datetime
+import sys
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 from jinja2 import Environment, FileSystemLoader, FileSystemBytecodeCache, select_autoescape
 
 from sdwan_desktop.core.types.context import FlowContext
-from sdwan_desktop.core.types.probe import ProbeProtocol
+from sdwan_desktop.core.types.probe import ProbeProtocol, ProbeTarget
+from sdwan_desktop.services.analyzer.rules.system import find_ip_conflicts_from_arp
 from sdwan_desktop.services.orchestrator.diagnostic_flow import DiagnosticResult
 from sdwan_desktop.core.types.diagnosis import DiagnosisResult, RootCause, Severity
+from sdwan_desktop.services.reporter.report_delivery_context import (
+    build_business_diagnose_pack,
+    build_deep_dive_pack,
+    build_quick_check_pack,
+    biz_targets_from_business_probes,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -32,8 +40,7 @@ class HtmlReportBuilder:
         if template_dir is None:
             # 默认模板目录
             # 支持 PyInstaller 打包环境
-            import sys
-            if getattr(sys, 'frozen', False):
+            if getattr(sys, "frozen", False):
                 # PyInstaller 打包后的环境
                 # 模板文件在 _MEIPASS/sdwan_desktop/reporting/templates
                 base_path = Path(sys._MEIPASS)
@@ -81,7 +88,11 @@ class HtmlReportBuilder:
         try:
             template = self.env.get_template("quick_check.html")
 
-            # 准备模板数据
+            gen_iso = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+            report_pack = build_quick_check_pack(
+                result=result, generated_at_iso=gen_iso
+            ).as_template_dict()
+            connectivity = self._extract_connectivity(result)
             context = {
                 "report_id": result.id,
                 "trace_id": result.trace_id,
@@ -92,10 +103,11 @@ class HtmlReportBuilder:
                 "summary": result.summary,
                 "confidence": int(result.overall_confidence * 100),
                 "root_causes": result.root_causes,
-                "recommendations": result.recommendations,
-                "evidences": result.evidences,
+                "executive_summary": self._build_executive_summary(result, connectivity),
+                "evidence_sections": self._format_evidences_for_display(result.evidences or []),
                 "system_info": self._extract_system_info(result),
-                "connectivity": self._extract_connectivity(result),
+                "connectivity": connectivity,
+                "report_pack": report_pack,
             }
 
             html_content = template.render(**context)
@@ -135,7 +147,46 @@ class HtmlReportBuilder:
             HTML 内容字符串
         """
         try:
-            template = self.env.get_template("deep_dive.html")
+            # 联合业务等场景写入 topology.report_html_h1 时使用独立模板，便于验收期与 deep_dive.html 并存。
+            template_name = (
+                "deep_dive_joint_ux.html"
+                if isinstance(topology_data, dict) and topology_data.get("report_html_h1")
+                else "deep_dive.html"
+            )
+            template = self.env.get_template(template_name)
+            logger.debug("深度诊断 HTML 使用模板: %s", template_name)
+
+            if not isinstance(topology_data, dict):
+                topology_data = {}
+
+            gen_iso = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+            existing_pack = topology_data.get("report_pack")
+            if isinstance(existing_pack, dict) and existing_pack:
+                report_pack = existing_pack
+            else:
+                has_bp = False
+                if isinstance(topology_data, dict):
+                    tp = topology_data.get("targeted_probe")
+                    if isinstance(tp, dict):
+                        data = tp.get("data")
+                        if isinstance(data, dict) and data.get("business_probes"):
+                            has_bp = True
+                report_pack = build_deep_dive_pack(
+                    result=result,
+                    has_business_probe=has_bp,
+                    generated_at_iso=gen_iso,
+                ).as_template_dict()
+
+            business_probes: List[Dict[str, Any]] = []
+            probe_status = "unknown"
+            tp_env = topology_data.get("targeted_probe")
+            if isinstance(tp_env, dict):
+                probe_status = str(tp_env.get("status") or "unknown")
+                tp_data = tp_env.get("data")
+                if isinstance(tp_data, dict):
+                    bp = tp_data.get("business_probes")
+                    if isinstance(bp, list):
+                        business_probes = [r for r in bp if isinstance(r, dict)]
 
             # 准备模板数据
             context = {
@@ -151,6 +202,9 @@ class HtmlReportBuilder:
                 "recommendations": result.recommendations,
                 "evidences": result.evidences,
                 "topology": topology_data,
+                "report_pack": report_pack,
+                "business_probes": business_probes,
+                "probe_status": probe_status,
             }
 
             html_content = template.render(**context)
@@ -171,6 +225,71 @@ class HtmlReportBuilder:
 
         except Exception as e:
             logger.error(f"深度诊断 HTML 报告生成失败: {e}", exc_info=True)
+            raise
+
+    def build_business_diagnosis_report(
+        self,
+        result: DiagnosisResult,
+        business_probes: List[Dict[str, Any]],
+        output_path: Optional[Path] = None,
+        extra_context: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        """构建本机业务不通诊断 HTML 报告（独立 CLI 使用）。
+
+        Args:
+            result: 诊断结果（含根因列表）。
+            business_probes: ``orchestrate_business_domain_port_diagnosis`` 返回的探测行（含可选 ``trace``）。
+            output_path: 输出文件路径（可选）。
+            extra_context: 附加模板变量（如 ``aggregate_error``、``pc_snapshot``）。
+
+        Returns:
+            HTML 内容字符串。
+        """
+        try:
+            template = self.env.get_template("business_diagnosis.html")
+            gen_iso = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+            joint = False
+            if extra_context and isinstance(extra_context.get("joint_mode"), bool):
+                joint = extra_context["joint_mode"]
+            targets = biz_targets_from_business_probes(business_probes or [])
+            report_pack = build_business_diagnose_pack(
+                result=result,
+                joint_mode=joint,
+                biz_targets=targets,
+                generated_at_iso=gen_iso,
+            ).as_template_dict()
+            ctx: dict = {
+                "report_id": result.id,
+                "trace_id": result.trace_id,
+                "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "diagnosis_type": result.diagnosis_type,
+                "rule_version": result.rule_version,
+                "severity": result.severity,
+                "summary": result.summary,
+                "confidence": int(result.overall_confidence * 100),
+                "root_causes": result.root_causes,
+                "recommendations": result.recommendations,
+                "evidences": result.evidences,
+                "business_probes": business_probes or [],
+                "report_pack": report_pack,
+            }
+            if extra_context:
+                ctx.update(extra_context)
+
+            html_content = template.render(**ctx)
+            html_content = self._inline_static_resources(html_content)
+
+            if output_path:
+                output_path = Path(output_path)
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                with open(output_path, "w", encoding="utf-8", buffering=8192) as f:
+                    f.write(html_content)
+                logger.info("业务诊断 HTML 报告已保存至: %s", output_path)
+
+            return html_content
+
+        except Exception as e:
+            logger.error("业务诊断 HTML 报告生成失败: %s", e, exc_info=True)
             raise
 
     def _get_severity_text(self, severity: Severity) -> str:
@@ -221,20 +340,20 @@ class HtmlReportBuilder:
             "gateway_ip": "N/A",
             "domestic_success_rate": 0,
             "international_success_rate": 0,
-            "dns_split_detected": False,
             "gateway_rtt": 0.0,
             "gateway_loss_rate": 0.0,
             "dns_results": [],
             "internet_targets": [],
-            "dns_split_details": [],
             "cpe_link_routing": None,
         }
+
+        dns_by_server: Dict[str, dict] = {}
 
         # 1. 尝试从证据中获取原始探测数据 (最详细的数据源)
         for evidence in result.evidences:
             if hasattr(evidence, 'probe_results') and evidence.probe_results:
                 for probe in evidence.probe_results:
-                    target_host = probe.target.host if hasattr(probe, 'target') and probe.target else "Unknown"
+                    target_host = self._probe_target_host(probe)
                     
                     # 网关信息
                     if probe.target.protocol == ProbeProtocol.ICMP:
@@ -245,18 +364,22 @@ class HtmlReportBuilder:
                             connectivity["gateway_rtt"] = probe.metrics.rtt_avg or 0.0
                             connectivity["gateway_loss_rate"] = probe.metrics.loss_rate or 0.0
                     
-                    # DNS 信息
+                    # DNS 信息（按服务器去重，避免报告阶段重复写入）
                     elif probe.target.protocol == ProbeProtocol.DNS:
+                        if target_host.startswith("ProbeTarget("):
+                            continue
                         resolved_ips = []
                         if probe.metrics and hasattr(probe.metrics, 'resolved_ips'):
                             resolved_ips = probe.metrics.resolved_ips or []
-                        
-                        connectivity["dns_results"].append({
+                        row = {
                             "server": target_host,
                             "success": probe.success,
                             "rtt": probe.metrics.rtt_avg or 0.0,
-                            "resolved_ips": ", ".join(resolved_ips) if resolved_ips else "无解析记录"
-                        })
+                            "resolved_ips": ", ".join(resolved_ips) if resolved_ips else "无解析记录",
+                        }
+                        prev = dns_by_server.get(target_host)
+                        if prev is None or (row["success"] and not prev["success"]):
+                            dns_by_server[target_host] = row
                     
                     # 互联网目标
                     elif probe.target.protocol in [ProbeProtocol.HTTP, ProbeProtocol.HTTPS, ProbeProtocol.TCP]:
@@ -272,100 +395,13 @@ class HtmlReportBuilder:
                             "rtt": rtt_val
                         })
 
-            # 2. 提取 DNS 分流测试详情
             if hasattr(evidence, 'config_snapshots') and evidence.config_snapshots:
-                # ✅ 调试日志：记录所有可用的 config_snapshots keys
                 logger.debug(
                     f"证据链 config_snapshots keys: {list(evidence.config_snapshots.keys())}",
                     extra={"trace_id": result.trace_id}
                 )
-                
-                split_result = evidence.config_snapshots.get("dns_split_result")
-                if split_result:
-                    logger.info(
-                        f"✅ 找到 DNS 分流结果: {type(split_result).__name__}",
-                        extra={"trace_id": result.trace_id}
-                    )
-                    
-                    # 兼容 DnsSplitTestResult 对象和字典格式
-                    domain_results = getattr(split_result, 'domain_results', [])
-                    if not domain_results and isinstance(split_result, dict):
-                        domain_results = split_result.get("domain_results", [])
 
-                    logger.debug(
-                        f"   - DNS分流域名结果数: {len(domain_results)}",
-                        extra={"trace_id": result.trace_id}
-                    )
-
-                    for dr in domain_results:
-                        # 兼容 DomainDnsResult 对象和字典格式
-                        if isinstance(dr, dict):
-                            domain = dr.get("domain", "N/A")
-                            is_split = dr.get("is_split", False)
-                            description = dr.get("split_description", "")
-                            domestic_res = dr.get("domestic_results", {})
-                            international_res = dr.get("international_results", {})
-                        else:
-                            domain = getattr(dr, 'domain', "N/A")
-                            is_split = getattr(dr, 'is_split', False)
-                            description = getattr(dr, 'split_description', "")
-                            domestic_res = getattr(dr, 'domestic_results', {})
-                            international_res = getattr(dr, 'international_results', {})
-
-                        # ✅ 优化：从结果中提取 IP 列表（而非整个对象）
-                        def extract_ips(res_dict):
-                            """从 DNS 解析结果字典中提取 IP 地址字符串
-            
-                            Args:
-                                res_dict: DNS解析结果字典 {dns_server: [ip_list]} 或字符串
-            
-                            Returns:
-                                str: IP地址字符串，多个IP用逗号分隔
-                            """
-                            if isinstance(res_dict, dict):
-                                # 字典格式：{dns_server: [ip_list]}
-                                all_ips = []
-                                for dns_server, ip_list in res_dict.items():
-                                    if isinstance(ip_list, list):
-                                        # 过滤掉错误信息
-                                        valid_ips = [ip for ip in ip_list if not ip.startswith("ERROR:")]
-                                        all_ips.extend(valid_ips)
-                                    elif isinstance(ip_list, str) and ip_list:
-                                        all_ips.append(ip_list)
-                                
-                                return ", ".join(all_ips) if all_ips else "无解析记录"
-                            elif isinstance(res_dict, str):
-                                return res_dict
-                            elif isinstance(res_dict, list):
-                                # 兼容旧版列表格式
-                                ips = []
-                                for item in res_dict:
-                                    if isinstance(item, dict):
-                                        ip = item.get("resolved_ip", "")
-                                        if ip:
-                                            ips.append(ip)
-                                    elif hasattr(item, "resolved_ip"):
-                                        ip = getattr(item, "resolved_ip", "")
-                                        if ip:
-                                            ips.append(ip)
-                                return ", ".join(ips) if ips else "无解析记录"
-                            else:
-                                return "无解析记录"
-                        
-                        domestic_ips_str = extract_ips(domestic_res)
-                        international_ips_str = extract_ips(international_res)
-
-                        connectivity["dns_split_details"].append({
-                            "domain": domain,
-                            "is_split": is_split,
-                            "description": description,
-                            "domestic_ips": domestic_ips_str,
-                            "international_ips": international_ips_str,
-                        })
-                        if is_split:
-                            connectivity["dns_split_detected"] = True
-
-                # 3. 提取 CPE 链路分流检测结果
+                # 2. 提取 CPE 链路分流检测结果
                 cpe_routing_result = evidence.config_snapshots.get("cpe_link_routing_result")
                 
                 # ✅ 调试日志：记录是否找到 CPE 链路分流数据
@@ -442,7 +478,9 @@ class HtmlReportBuilder:
                         extra={"trace_id": result.trace_id}
                     )
 
-        # 4. 计算成功率
+        connectivity["dns_results"] = list(dns_by_server.values())
+
+        # 3. 计算成功率
         domestic_targets = [t for t in connectivity["internet_targets"] if t["category"] == "domestic"]
         international_targets = [t for t in connectivity["internet_targets"] if t["category"] == "international"]
         
@@ -458,72 +496,74 @@ class HtmlReportBuilder:
 
     def _filter_key_routes(self, routes: list, dns_servers: list = None) -> list:
         """筛选关键路由表项
-        
+
         基于SD-WAN诊断场景的业务优先级排序：
-        1. 默认路由 (0.0.0.0/0) - 最高优先级，决定流量出口
+        1. **所有**默认路由 (0.0.0.0/0) — 必须全量展示，多默认路由是常见根因
         2. CPE网关路由 - 指向SD-WAN设备的关键路径
         3. DNS服务器路由 - 确保DNS解析可达性
         4. 低Metric静态路由 - 策略路由和业务分流规则
-        
+
         Args:
             routes: 原始路由列表
             dns_servers: DNS服务器IP列表（用于识别DNS路由）
-            
+
         Returns:
-            按优先级排序的关键路由列表（最多4条）
+            按优先级排序的关键路由列表（字典格式，包含 interface/protocol）
         """
         if not routes:
             return []
-        
-        # 分类收集路由
-        default_routes = []      # 默认路由
-        gateway_routes = []      # 网关路由
-        dns_routes = []          # DNS路由
-        static_routes = []       # 静态/策略路由
-        
+
+        default_routes = []
+        gateway_routes = []
+        dns_routes = []
+        static_routes = []
+
         for route in routes:
             dest = getattr(route, 'destination', '')
             mask = getattr(route, 'netmask', '')
             gw = getattr(route, 'gateway', '')
             metric = getattr(route, 'metric', 999)
             protocol = getattr(route, 'protocol', '')
-            
-            # 1. 默认路由（最高优先级）
+
             if dest == "0.0.0.0" and mask == "0.0.0.0":
                 default_routes.append(route)
                 continue
-            
-            # 2. CPE网关路由（假设CPE在192.168.x.x或10.x.x.x私有网段）
+
             if gw and (gw.startswith("192.168.") or gw.startswith("10.")):
                 gateway_routes.append(route)
                 continue
-            
-            # 3. DNS服务器路由
+
             if dns_servers and any(dns_ip in dest for dns_ip in dns_servers):
                 dns_routes.append(route)
                 continue
-            
-            # 4. 低Metric静态路由（策略路由）
+
             if metric < 100 and protocol in ["static", "local", "bgp", "ospf"]:
                 static_routes.append(route)
                 continue
-        
-        # 按优先级合并（只保留真正关键的路由，不补充其他路由）
+
+        # 全量保留默认路由（按 metric 升序便于辨认主备）；其他类别仍做截断
+        default_routes_sorted = sorted(
+            default_routes,
+            key=lambda r: (getattr(r, "metric", 0) if getattr(r, "metric", None) is not None else 999),
+        )
         key_routes = []
-        key_routes.extend(default_routes[:1])           # 最多1条默认路由
-        key_routes.extend(gateway_routes[:2])           # 最多2条网关路由
-        key_routes.extend(dns_routes[:1])               # 最多1条DNS路由
-        key_routes.extend(static_routes[:1])            # 最多1条静态路由
-        
-        # 转换为字典格式
+        key_routes.extend(default_routes_sorted)
+        key_routes.extend(gateway_routes[:2])
+        key_routes.extend(dns_routes[:2])
+        key_routes.extend(static_routes[:2])
+
+        # 上限放宽以容纳多默认路由场景；若仅 1 条默认路由则总体仍很精简
+        max_rows = max(6, len(default_routes_sorted) + 4)
         return [
             {
                 "dest": r.destination,
                 "mask": r.netmask,
                 "gw": r.gateway,
                 "metric": r.metric,
+                "interface": getattr(r, "interface", "") or "",
+                "protocol": getattr(r, "protocol", "") or "",
             }
-            for r in key_routes[:4]  # 最终限制为4条
+            for r in key_routes[:max_rows]
         ]
 
     def _extract_system_info(self, result: DiagnosisResult) -> dict:
@@ -541,6 +581,7 @@ class HtmlReportBuilder:
             "routes": [],
             "firewall": "未知",
             "proxy": "未启用",
+            "ip_conflicts": [],
         }
 
         for evidence in (result.evidences or []):
@@ -565,24 +606,56 @@ class HtmlReportBuilder:
                         for adapter in snapshot.adapters
                     ]
                 
+                # 默认路由清单（用于关键路由表项 / 默认网关多值场景）
+                default_routes_dicts: List[dict] = []
+                if hasattr(snapshot, 'routes') and snapshot.routes:
+                    for r in snapshot.routes:
+                        if getattr(r, "destination", "") == "0.0.0.0" and getattr(r, "netmask", "") == "0.0.0.0":
+                            default_routes_dicts.append({
+                                "dest": r.destination,
+                                "mask": r.netmask,
+                                "gw": r.gateway or "on-link",
+                                "metric": r.metric if r.metric is not None else "?",
+                                "interface": getattr(r, "interface", "") or "",
+                                "protocol": getattr(r, "protocol", "") or "",
+                            })
+                    default_routes_dicts.sort(
+                        key=lambda d: (d["metric"] if isinstance(d["metric"], int) else 999)
+                    )
+
                 # IP 配置
                 if hasattr(snapshot, 'ip_config') and snapshot.ip_config:
+                    primary_gw = snapshot.ip_config.default_gateway or "N/A"
+                    # default_gateways：去重保序，包含主默认网关 + 所有默认路由网关
+                    seen = set()
+                    gw_list: List[str] = []
+                    def _add_gw(g: Optional[str]) -> None:
+                        if g and g != "N/A" and g not in seen:
+                            seen.add(g)
+                            gw_list.append(g)
+                    _add_gw(snapshot.ip_config.default_gateway)
+                    for d in default_routes_dicts:
+                        _add_gw(d.get("gw"))
                     system_info["ip_config"] = {
-                        "gateway": snapshot.ip_config.default_gateway or "N/A",
+                        "gateway": primary_gw,
+                        "default_gateways": gw_list,
                         "dns_servers": ", ".join(snapshot.ip_config.dns_servers) if snapshot.ip_config.dns_servers else "N/A",
                     }
-                
-                # 路由信息 (智能筛选关键路由)
+
+                # 路由信息 (智能筛选关键路由 + 全量默认路由)
                 if hasattr(snapshot, 'routes'):
-                    # 提取DNS服务器列表用于路由筛选
                     dns_servers = []
                     if hasattr(snapshot, 'ip_config') and snapshot.ip_config:
                         dns_servers = snapshot.ip_config.dns_servers or []
-                    
+
                     system_info["routes"] = self._filter_key_routes(
-                        snapshot.routes, 
+                        snapshot.routes,
                         dns_servers
                     )
+                    # 单独透出「默认路由清单」便于模板高亮多默认路由
+                    system_info["default_routes"] = default_routes_dicts
+                    system_info["default_route_count"] = len(default_routes_dicts)
+                    system_info["routes_total"] = len(snapshot.routes or [])
 
                 # 防火墙与代理状态
                 if hasattr(snapshot, 'firewall_status') and snapshot.firewall_status:
@@ -594,10 +667,225 @@ class HtmlReportBuilder:
                     px = snapshot.proxy_config
                     # ProxyInfo 也是 dataclass
                     system_info["proxy"] = "启用" if getattr(px, 'enabled', False) else "未启用"
+
+                if hasattr(snapshot, "arp_table") and snapshot.arp_table:
+                    system_info["ip_conflicts"] = find_ip_conflicts_from_arp(snapshot.arp_table)
                 
                 break
 
         return system_info
+
+    def _build_executive_summary(self, result: DiagnosisResult, connectivity: dict) -> dict:
+        """构建执行摘要：健康结论 + 连通性一览 + 优先处置项。"""
+        causes = result.root_causes or []
+        sev_counts = {"critical": 0, "error": 0, "warning": 0, "info": 0}
+        for c in causes:
+            s = c.severity.value if hasattr(c.severity, "value") else str(c.severity)
+            sev_counts[s] = sev_counts.get(s, 0) + 1
+
+        deductions = (
+            sev_counts["critical"] * 30
+            + sev_counts["error"] * 20
+            + sev_counts["warning"] * 10
+            + sev_counts["info"] * 5
+        )
+        health_score = max(0, 100 - deductions)
+
+        gw_ok = connectivity.get("gateway_status") == "ok"
+        dns_list = connectivity.get("dns_results") or []
+        dns_ok = sum(1 for d in dns_list if d.get("success"))
+        dns_total = len(dns_list)
+        dom_rate = connectivity.get("domestic_success_rate", 0)
+        intl_rate = connectivity.get("international_success_rate", 0)
+        internet_targets = connectivity.get("internet_targets") or []
+        failed_probes = [
+            {
+                "host": t.get("host", "?"),
+                "category": "国内" if t.get("category") == "domestic" else "国际",
+            }
+            for t in internet_targets
+            if not t.get("success")
+        ]
+        probe_total = len(internet_targets)
+        probe_ok = probe_total - len(failed_probes)
+
+        priority_actions: List[str] = []
+        for c in sorted(
+            causes,
+            key=lambda x: (
+                0 if (x.severity.value if hasattr(x.severity, "value") else "") == "critical" else
+                1 if (x.severity.value if hasattr(x.severity, "value") else "") == "error" else 2
+            ),
+        ):
+            if c.remediation and c.remediation not in priority_actions:
+                priority_actions.append(f"[{c.cause_id}] {c.remediation}")
+            if len(priority_actions) >= 3:
+                break
+
+        verdict = "正常"
+        if sev_counts["critical"] or sev_counts["error"]:
+            verdict = "需处理"
+        elif sev_counts["warning"] or failed_probes:
+            verdict = "需关注"
+
+        return {
+            "health_score": health_score,
+            "verdict": verdict,
+            "issue_count": len(causes),
+            "severity_breakdown": sev_counts,
+            "gateway_ok": gw_ok,
+            "gateway_ip": connectivity.get("gateway_ip", "N/A"),
+            "dns_ok": dns_ok,
+            "dns_total": dns_total,
+            "domestic_success_rate": dom_rate,
+            "international_success_rate": intl_rate,
+            "probe_ok": probe_ok,
+            "probe_total": probe_total,
+            "failed_probes": failed_probes,
+            "priority_actions": priority_actions,
+        }
+
+    def _format_evidences_for_display(self, evidences: list) -> List[dict]:
+        """将证据链转为模板友好的结构化块（表格为主）。"""
+        sections: List[dict] = []
+        for ev in evidences:
+            step_name = getattr(ev, "step_name", "unknown")
+            evidence_type = self._guess_evidence_type(step_name)
+            block: dict = {
+                "step_name": step_name,
+                "description": getattr(ev, "description", ""),
+                "evidence_type": evidence_type,
+                "probe_results": getattr(ev, "probe_results", None) or [],
+                "snapshot_tables": [],
+            }
+            snapshots = getattr(ev, "config_snapshots", None) or {}
+            for key, value in snapshots.items():
+                if key == "system_snapshot" and value is not None:
+                    block["snapshot_tables"].append(
+                        self._snapshot_table_system(value, title="系统配置快照")
+                    )
+                    # 默认路由证据表（多默认路由的关键证据）
+                    routes_table = self._snapshot_table_default_routes(value)
+                    if routes_table["rows"]:
+                        block["snapshot_tables"].append(routes_table)
+                elif key == "cpe_link_routing_result" and value is not None:
+                    block["snapshot_tables"].extend(
+                        self._snapshot_tables_cpe_routing(value)
+                    )
+            sections.append(block)
+        return sections
+
+    @staticmethod
+    def _guess_evidence_type(step_name: str) -> str:
+        """根据 ``step_name`` 给出更具体的证据类型标签，避免一律显示「通用」。"""
+        if not step_name:
+            return "通用"
+        n = str(step_name).lower()
+        if "connectivity" in n:
+            return "连通性探测"
+        if "gateway" in n:
+            return "网关探测"
+        if "dns" in n:
+            return "DNS 探测"
+        if "internet" in n:
+            return "互联网可达性"
+        if "cpe" in n or "routing" in n or "traceroute" in n:
+            return "链路追踪"
+        if "system" in n or "collect" in n:
+            return "系统快照"
+        return "通用"
+
+    def _snapshot_table_system(self, snapshot: Any, *, title: str) -> dict:
+        rows: List[dict] = []
+        if hasattr(snapshot, "ip_config") and snapshot.ip_config:
+            ic = snapshot.ip_config
+            rows.append({"项": "默认网关", "值": ic.default_gateway or "N/A"})
+            dns = ", ".join(ic.dns_servers) if ic.dns_servers else "N/A"
+            rows.append({"项": "DNS 服务器", "值": dns})
+        if hasattr(snapshot, "primary_adapter") and snapshot.primary_adapter:
+            pa = snapshot.primary_adapter
+            rows.append({
+                "项": "主网卡",
+                "值": f"{pa.description or pa.name} | 连接={pa.is_connected} | 网关={pa.default_gateway or 'N/A'}",
+            })
+        if hasattr(snapshot, "routes"):
+            routes = snapshot.routes or []
+            default_count = sum(
+                1 for r in routes
+                if getattr(r, "destination", "") == "0.0.0.0" and getattr(r, "netmask", "") == "0.0.0.0"
+            )
+            rows.append({"项": "路由表项数（总/默认）", "值": f"{len(routes)} / {default_count}"})
+        if hasattr(snapshot, "arp_table"):
+            rows.append({"项": "ARP 表项数", "值": str(len(snapshot.arp_table or []))})
+        return {"title": title, "rows": rows}
+
+    def _snapshot_table_default_routes(self, snapshot: Any) -> dict:
+        """证据附录中的「默认路由清单」表（每条路由一行，2 列结构）。
+
+        若存在多条默认路由，此表是 ROUTE-001/002 根因结论最直接的原始证据。
+        采用「序号 → 路由文本」的 2 列结构，与证据附录的其它快照表保持一致渲染。
+        """
+        rows: List[dict] = []
+        routes = getattr(snapshot, "routes", None) or []
+        defaults = [
+            r for r in routes
+            if getattr(r, "destination", "") == "0.0.0.0" and getattr(r, "netmask", "") == "0.0.0.0"
+        ]
+        defaults.sort(
+            key=lambda r: (getattr(r, "metric", 0) if getattr(r, "metric", None) is not None else 999)
+        )
+        for idx, r in enumerate(defaults, 1):
+            gw = getattr(r, "gateway", "") or "on-link"
+            iface = getattr(r, "interface", "") or "N/A"
+            metric = getattr(r, "metric", None)
+            metric_repr = "?" if metric is None else str(metric)
+            protocol = getattr(r, "protocol", "") or ""
+            proto_repr = f" [{protocol}]" if protocol else ""
+            rows.append({
+                "项": f"默认路由 #{idx}",
+                "值": f"0.0.0.0/0 via {gw} dev \"{iface}\" metric {metric_repr}{proto_repr}",
+            })
+        if rows:
+            rows.insert(0, {"项": "默认路由总数", "值": str(len(defaults))})
+        return {"title": "默认路由清单", "rows": rows}
+
+    def _snapshot_tables_cpe_routing(self, cpe: Any) -> List[dict]:
+        tables: List[dict] = []
+        dist = getattr(cpe, "link_distribution", None) or {}
+        if dist:
+            rows = [{"路径指纹": fp, "域名": ", ".join(domains)} for fp, domains in dist.items()]
+            tables.append({"title": "CPE 链路分布", "rows": rows})
+        domain_results = getattr(cpe, "domain_results", None) or []
+        if domain_results:
+            rows = []
+            for dr in domain_results[:10]:
+                if isinstance(dr, dict):
+                    rows.append({
+                        "域名": dr.get("domain", "N/A"),
+                        "解析 IP": dr.get("resolved_ip", "N/A"),
+                        "链路": dr.get("link_category", "N/A"),
+                    })
+                else:
+                    rows.append({
+                        "域名": getattr(dr, "domain", "N/A"),
+                        "解析 IP": getattr(dr, "resolved_ip", "N/A"),
+                        "链路": getattr(dr, "link_category", "N/A"),
+                    })
+            tables.append({"title": "域名路径摘要", "rows": rows})
+        return tables
+
+    @staticmethod
+    def _probe_target_host(probe: Any) -> str:
+        """从探测结果中解析目标主机（DNS 服务器 IP 等）。"""
+        target = getattr(probe, "target", None)
+        if target is None:
+            return "Unknown"
+        if isinstance(target, ProbeTarget):
+            host = target.host
+            return host if isinstance(host, str) else str(host)
+        if isinstance(target, str):
+            return target
+        return str(target)
 
     def _inline_static_resources(self, html_content: str) -> str:
         """将关键的 CSS/JS 资源内联到 HTML 中，减少 HTTP 请求并提升单文件便携性

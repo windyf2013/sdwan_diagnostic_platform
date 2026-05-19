@@ -92,3 +92,38 @@ def test_har_parser_invalid_file():
     parser = HarParser()
     with pytest.raises(Exception):
         parser.parse("non_existent_file.har")
+
+
+def test_har_parser_target_url_prefers_explicit(har_file):
+    """显式传入的 target_url 优先级最高（修正历史上把 startedDateTime 误用为 URL 的 Bug）。"""
+    parser = HarParser()
+    result = parser.parse(har_file, target_url="https://example.com/")
+    assert result.target_url == "https://example.com/"
+
+
+def test_har_parser_target_url_falls_back_to_first_entry(har_file):
+    """未显式传入时回退到首条 HAR entry 的 URL，而非 startedDateTime 时间戳。"""
+    parser = HarParser()
+    result = parser.parse(har_file)
+    # 样本 HAR 中 startedDateTime 故意写成 'https://example.com'（历史 Bug 残留的数据形态）；
+    # 修正后 target_url 应来自首条 entry.request.url，而不是 pages[0].startedDateTime。
+    assert result.target_url == "https://example.com/index.html"
+
+
+def test_har_parser_target_url_when_no_entries():
+    """无 entries 时回退到 startedDateTime（保留旧报告的弱兼容行为）。"""
+    har_blob = {
+        "log": {
+            "version": "1.2",
+            "pages": [{"startedDateTime": "2026-05-18T03:36:58.145Z"}],
+            "entries": [],
+        }
+    }
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".har", delete=False) as f:
+        json.dump(har_blob, f)
+        path = f.name
+    try:
+        result = HarParser().parse(path)
+        assert result.target_url == "2026-05-18T03:36:58.145Z"
+    finally:
+        os.unlink(path)

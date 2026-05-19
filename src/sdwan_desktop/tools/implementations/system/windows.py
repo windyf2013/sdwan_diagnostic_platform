@@ -9,7 +9,7 @@ Windows系统信息采集工具
 import asyncio
 import logging
 import re
-import subprocess
+from sdwan_desktop.core.subprocess_platform import run_hidden
 import sys
 import winreg
 from typing import Any, Dict, List, Optional, Tuple
@@ -293,12 +293,12 @@ class WindowsSystemTool:
         
         try:
             # 执行ipconfig /all命令
-            result = subprocess.run(
+            result = run_hidden(
                 ["ipconfig", "/all"],
                 capture_output=True,
                 text=True,
                 encoding="gbk",  # Windows中文系统使用gbk编码
-                errors="ignore"
+                errors="ignore",
             )
             
             if result.returncode != 0:
@@ -461,12 +461,12 @@ class WindowsSystemTool:
         """获取路由表"""
         routes = []
         try:
-            result = subprocess.run(
+            result = run_hidden(
                 ["route", "print", "-4"],
                 capture_output=True,
                 text=True,
                 encoding="gbk",
-                errors="ignore"
+                errors="ignore",
             )
             if result.returncode != 0:
                 return routes
@@ -505,14 +505,14 @@ class WindowsSystemTool:
     async def _get_dns_config(self, ctx: FlowContext) -> Optional[DnsConfigInfo]:
         """获取DNS配置"""
         try:
-            result = subprocess.run(
+            result = run_hidden(
                 ["ipconfig", "/all"],
                 capture_output=True,
                 text=True,
                 encoding="gbk",
-                errors="ignore"
+                errors="ignore",
             )
-            
+
             if result.returncode != 0:
                 return DnsConfigInfo(servers=[])
             
@@ -542,26 +542,45 @@ class WindowsSystemTool:
         return FirewallInfo(enabled=False)
 
     async def _get_arp_table(self, ctx: FlowContext) -> List[ArpEntry]:
-        """获取ARP表"""
-        entries = []
+        """获取 ARP 表（含 Interface 分段，供与 CPE MAC 交叉验证）。"""
+        entries: List[ArpEntry] = []
         try:
-            result = subprocess.run(
+            result = run_hidden(
                 ["arp", "-a"],
                 capture_output=True,
                 text=True,
                 encoding="gbk",
-                errors="ignore"
+                errors="ignore",
             )
             if result.returncode != 0:
                 return entries
-            
-            output = result.stdout
-            for line in output.splitlines():
+
+            current_scope = ""
+            iface_hdr = re.compile(
+                r"^(?:Interface:|接口:)\s*(\d+\.\d+\.\d+\.\d+)\s+",
+                re.IGNORECASE,
+            )
+            row_re = re.compile(
+                r"^\s*(\d+\.\d+\.\d+\.\d+)\s+([0-9a-fA-F]{2}(?:[:-][0-9a-fA-F]{2}){5})\s+",
+            )
+
+            for line in result.stdout.splitlines():
                 line = line.strip()
-                if "动态" in line or "Dynamic" in line or (len(line.split()) >= 2 and ":" in line.split()[1]):
-                    parts = re.split(r'\s+', line)
-                    if len(parts) >= 2:
-                        entries.append(ArpEntry(ip_address=parts[0], mac_address=parts[1]))
+                if not line:
+                    continue
+                m_if = iface_hdr.match(line)
+                if m_if:
+                    current_scope = m_if.group(1)
+                    continue
+                m_row = row_re.match(line)
+                if m_row:
+                    entries.append(
+                        ArpEntry(
+                            ip_address=m_row.group(1),
+                            mac_address=m_row.group(2),
+                            interface=current_scope,
+                        )
+                    )
         except Exception as e:
             logger.error(f"采集ARP表失败: {e}", extra={"trace_id": ctx.trace_id})
         return entries

@@ -163,6 +163,10 @@ reports/
 configs/local.yaml
 configs/*.local.yaml
 
+# CPE 设备登录 / testnode 等视图密码（用户本地填写，勿入库）
+configs/cpe_credentials.yaml
+configs/cpe_view_credentials.yaml
+
 # Sensitive data
 *.key
 *.pem

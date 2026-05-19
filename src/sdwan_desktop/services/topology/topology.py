@@ -101,6 +101,7 @@ class NetworkTopology:
         cpe_node_id: CPE 节点 ID（如果有）
         gateway_node_id: 网关节点 ID（如果有）
         hub_node_id: Hub 节点 ID（如果有）
+        notes: 拓扑构建说明（如未画出 PC↔CPE 的原因），供报告展示
     """
     nodes: List[Node] = field(default_factory=list)
     edges: List[Edge] = field(default_factory=list)
@@ -108,6 +109,7 @@ class NetworkTopology:
     cpe_node_id: Optional[str] = None
     gateway_node_id: Optional[str] = None
     hub_node_id: Optional[str] = None
+    notes: List[str] = field(default_factory=list)
     
     def add_node(self, node: Node):
         """添加节点
@@ -204,4 +206,5 @@ class NetworkTopology:
             "cpe_node_id": self.cpe_node_id,
             "gateway_node_id": self.gateway_node_id,
             "hub_node_id": self.hub_node_id,
+            "topology_notes": list(self.notes),
         }

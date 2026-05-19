@@ -1,0 +1,665 @@
+设备类型：Raisecom 5200A CPE。
+使用场景：sdwan跨境分流业务的终端网关。
+信息内容：running-config 及 部分命令行信息。
+Username: 
+Username: CMCCAdmin
+Password: 
+host> enable          				#管理视图，无密码
+host# 
+host# testnode						    #testnode视图命令
+Password: 							      #testnode视图需密码
+host(test-node)# show version all
+Product series  : RCIOS_4.23 
+Compile time    : Aug  5 2025 01:41:15 
+Device uptime   : 0 Years, 75 Days, 9 hours, 3 minutes, 54 seconds.
+
+PN              : MSG5200-GEC-8E-G4 							#5200A设备型号，示例为cpe设备的一种型号
+Batch Number    : CM01 											      #批次号
+Customer        : raisecom 
+SubCustomer     : raisecom 
+Serial Number   : RCOM700EDB7D 
+System Loid     : 571-1-JU0HPFKCSUGAKNXS 
+Active image    : 1 
+RCIOS version   : 4.23.387.20250805 							#5200A软件版本格式为4.23.xxx.年月日
+System MAC      : e4:c7:70:0e:db:74 
+Bootrom version : 4.10.3
+ 
+PV              : A.00 											#5200A硬件型号为A.00
+PCB Version     : A.4 
+BOM Version     : A4.1 
+2.4G WLAN Card  :818c
+5G WLAN Card    :f812
+UserBehaviorControl: yes 
+
+
+host(test-node)# 
+host(test-node)# end				#返回至管理视图
+host# 
+host# show cpu usage 
+Total CPU Usage         : 7%
+CPU0 Usage              : 16%
+CPU1 Usage              : 3%
+CPU2 Usage              : 0%
+CPU3 Usage              : 7%
+host# 
+host# show memory usage 
+MemUsage                : 22.18%
+host# 
+host# show system uptime 
+current time            : Tue Mar 24 19:22:24 2026		#设备当前时间
+
+system runtime          : 75 days  9 hours 4 minutes	#设备运行时长
+host# 
+host# show dns active 							#设备真实dns查询命令
+ge1:
+ip name-server master  202.106.46.151			#设备默认local dns地址
+ip name-server backup  8.8.8.8
+host# 
+host# 
+host# configure terminal 					#配置视图，无密码
+host(config)# netconf   
+host(config-netconf)# show callhome all 
+  endpoint name : sdn_callhome
+  current link  : main link
+  auth type     : ssh
+  ip address    : 120.199.236.21
+  port          : 6666
+  ifname        : 
+  connect status: connected					#显示当前cpe到控制器连接状态
+
+host(config-netconf)# 
+host(config-netconf)# end
+host# 
+host# show arp
+                 Type:     S-Static    D-Dynamic    P-Proxy
+                 State:    R-Reachable S-Stale      D-Delay    P-Probe
+IP Address       HW Address             Type  HW type  Flags  State  Mask  Interface       Aging  Subvlan    Lan
+5.96.0.190       00:00:5e:20:82:a1      D     0x1      0x2    R      *     vxlan2500110    188    N/A        
+6.96.0.190       00:00:5e:20:82:a1      D     0x1      0x2    S      *     vxlan2510110    180    N/A        
+211.145.41.254   20:f1:7c:ae:49:16      D     0x1      0x2    R      *     ge1             76     N/A        
+192.168.46.2     cc:96:e5:3c:6a:9b      D     0x1      0x2    D      *     vlan1           4      N/A        
+211.145.41.37    08:00:37:d3:1d:21      D     0x1      0x2    R      *     ge1             26     N/A        
+5.100.0.190      00:00:5e:20:82:c2      D     0x1      0x2    D      *     vxlan2600110    0      N/A        
+192.168.46.4     20:1e:88:19:be:aa      D     0x1      0x2    R      *     vlan1           37     N/A        
+192.168.111.3    50:21:ec:8d:a4:6a      D     0x1      0x2    R      *     ge1             39     N/A        
+host# 
+host# show ip route
+Codes: K - kernel route, C - connected, S - static, R - RIP, O - OSPF,
+       D - DHCP, P - PPPOE, > - selected route, * - FIB route
+
+VRF -- Default-IP-Routing-Table : 
+S>* 0.0.0.0/0 [10/0] via 211.145.41.254, ge1 weight: 1
+C>* 5.96.0.188/30 is directly connected, vxlan2500110 weight: 0
+K>* 5.96.0.189/32 is directly connected, vxlan2500110 weight: 0
+C>* 5.100.0.188/30 is directly connected, vxlan2600110 weight: 0
+K>* 5.100.0.189/32 is directly connected, vxlan2600110 weight: 0
+C>* 6.96.0.188/30 is directly connected, vxlan2510110 weight: 0
+K>* 6.96.0.189/32 is directly connected, vxlan2510110 weight: 0
+S>* 8.8.4.4/32 [1/0] via 6.96.0.190, vxlan2510110 weight: 1
+S>* 8.8.8.8/32 [1/0] via 5.96.0.190, vxlan2500110 weight: 1
+C>* 11.24.0.1/32 is directly connected, l2tpc0 weight: 0
+K>* 11.24.0.94/32 is directly connected, l2tpc0 weight: 0
+C>* 11.25.0.1/32 is directly connected, l2tpc1 weight: 0
+K>* 11.25.0.94/32 is directly connected, l2tpc1 weight: 0
+C>* 127.0.0.0/8 is directly connected, lo weight: 0
+S>* 192.168.37.0/24 [5/0] via 5.96.0.190, vxlan2500110 weight: 1
+S   192.168.37.0/24 [8/0] via 5.100.0.190, vxlan2600110 weight: 1
+C>* 192.168.46.0/24 is directly connected, vlan1 weight: 0
+K>* 192.168.46.1/32 is directly connected, vlan1 weight: 0
+C>* 211.145.40.0/23 is directly connected, ge1 weight: 0
+K>* 211.145.41.30/32 is directly connected, ge1 weight: 0
+host# 
+host# diagnose 								#诊断视图；未设置 hostname 时提示符为 host# / host>，已设置时为 <name># / <name>（采集器用正则识别，不下发裸 hostname 以免误入配置子模式）
+Password: 									  #诊断视图需密码
+bash-4.3# 
+bash-4.3# ip rule show
+0:      from all lookup local 
+32764:  from all fwmark 0x67 lookup 100 
+32765:  from all fwmark 0x66 lookup 99 
+32766:  from all lookup main 
+32767:  from all lookup default 
+bash-4.3# 
+bash-4.3# ip route show table 100
+default via 6.96.0.190 dev vxlan2510110 		#直播业务默认路由
+bash-4.3# 
+bash-4.3# ip route show table 99 
+default via 5.96.0.190 dev vxlan2500110  		#跨境业务默认路由
+bash-4.3# 
+bash-4.3# exit								#退出诊断视图
+exit
+host# 
+host# show running-config 
+ !config
+hostname            #cpe设备名称：enable 下 hostname 命令与配置行一致；对应提示符 host# / host> / host(test-node)#；与 su/diagnose 无关
+user administrator CMCCAdmin local secret 88w90N13at3c/tv7ExSYn9r7i2BPoe5BJt5670
+BH9agkoQGk+wYC1H7JwSNxeb9 authorized-table telecomadmin   1
+user administrator user local secret h0YTUxrP/omLnZCXZ/SqX0KyfMjc6xWEehjcOfF1IqE
+45Zz7K/BzLJ1LCEK3BRs authorized-table useradmin   2
+!
+ntp pool.ntp.org 60
+ntp server-type 0
+!
+!
+!
+!
+!
+restorekey 10 3
+led-action 5 
+!
+set essid ath0 CMCC-n2lN
+set wpakey ath0 kXMxPzec
+choose wpa2mixedkey ath0 
+wlanup ath0
+set essid ath1 CMCC-0002
+choose free ath1
+wlandown ath1
+set essid ath2 CMCC-0003
+choose free ath2
+wlandown ath2
+set essid ath3 CMCC-0004
+choose free ath3
+wlandown ath3
+set essid ath4 ath4
+choose free ath4
+wlandown ath4
+set txpath ath0 2 enable 
+set txpath ath0 3 disable 
+wlanon
+set essid athfs0 CMCC-n2lN-5G
+set wpakey athfs0 kXMxPzec
+choose wpa2mixedkey athfs0 
+wlanup athfs0
+set essid athfs1 CMCC-0002-5G
+choose free athfs1
+wlandown athfs1
+set essid athfs2 CMCC-0003-5G
+choose free athfs2
+wlandown athfs2
+set essid athfs3 CMCC-0004-5G
+choose free athfs3
+wlandown athfs3
+set essid athfs4 athfs4
+choose free athfs4
+wlandown athfs4
+wlanpower5g 16
+!
+!
+!
+!
+cell apn cmnet
+cell idletime 300
+cell dial-interval 120
+!
+!
+tunnel tunnel1 
+ type vxlan
+ peer 11.24.0.1 
+ encrypt disable
+exit
+tunnel tunnel27 
+ type vxlan
+ source 11.24.0.94
+ peer 11.24.0.1 
+ encrypt disable
+exit
+tunnel tunnel28 
+ type vxlan
+ source 11.25.0.94
+ peer 11.25.0.1 
+ encrypt disable
+exit
+!
+interface allow-access off
+!
+interface access-switch 0
+!
+interface vlan1
+ instance num 1
+ip address 192.168.46.1/24
+ dhcpserver enable
+ ip-pool 192.168.46.2 192.168.46.254 6 days 22 hours 40 mins
+ network 192.168.46.1/24
+ default-router 192.168.46.1
+ dns-server 192.168.46.1 
+no ipv6 nd suppress-ra
+ipv6 dns-server proxy
+ access http					#访问控制权限默认关闭，不显示命令为默认
+ access https
+ access telnet
+ no access ssh
+ access ping
+!
+interface vlan4089
+no ipv6 nd suppress-ra
+ipv6 dns-server proxy
+!
+!
+interface vlan4091
+no ipv6 nd suppress-ra
+ipv6 dns-server proxy
+!
+!
+interface vlan4094
+!
+!
+interface eth1
+ aliasname LAN1
+!
+!
+interface eth2
+ aliasname LAN2
+!
+!
+interface eth3
+ aliasname LAN3
+!
+!
+interface eth4
+ aliasname LAN4
+!
+!
+interface eth5
+ aliasname LAN5
+!
+!
+interface eth6
+ aliasname LAN6
+!
+!
+interface eth7
+ aliasname LAN7
+!
+!
+interface eth8
+ aliasname LAN8
+!
+!
+interface ge1
+ aliasname WAN1
+ no switchport
+ ip address 211.145.41.30/23
+ serv-type internet										#internet类型，如果接口up 且 有ip地址，设备运行时会在路由main表下生成此接口为出接口的默认路由
+ package mode IPoE
+ gateway 211.145.41.254
+ ip name-server master 202.106.46.151
+ ip name-server backup 8.8.8.8
+ no ipv6 nd suppress-rs
+!
+!
+interface ath0
+ bind vlan 1
+ access http
+ access https
+ access telnet
+ access ssh
+ access ping
+!
+interface ath1
+ access http
+ access https
+ access telnet
+ access ssh
+ access ping
+!
+interface ath2
+ access http
+ access https
+ access telnet
+ access ssh
+ access ping
+!
+interface ath3
+ access http
+ access https
+ access telnet
+ access ssh
+ access ping
+!
+interface ath4
+ access http
+ access https
+ access telnet
+ access ssh
+ access ping
+!
+interface athfs0
+ bind vlan 1
+ access http
+ access https
+ access telnet
+ access ssh
+ access ping
+!
+interface athfs1
+ access http
+ access https
+ access telnet
+ access ssh
+ access ping
+!
+interface athfs2
+ access http
+ access https
+ access telnet
+ access ssh
+ access ping
+!
+interface athfs3
+ access http
+ access https
+ access telnet
+ access ssh
+ access ping
+!
+interface athfs4
+ access http
+ access https
+ access telnet
+ access ssh
+ access ping
+!
+interface br0
+ access http
+ access https
+ access telnet
+ access ssh
+ access ping
+!
+interface br-vrf-veth
+ bridge forward_type software
+ access http
+ access https
+ access telnet
+ access ssh
+ access ping
+!
+interface cell
+ serv-type internet
+ no access http
+ no access https
+ no access telnet
+ no access ssh
+ access ping
+!
+interface vxlan2500110
+ bind tunnel27
+ mtu 1300
+ instance num 1
+ip address 5.96.0.189/30
+ serv-type internet
+ access http
+ access https
+ access telnet
+ access ssh
+ access ping
+!
+interface vxlan2510110
+ bind tunnel1
+ mtu 1300
+ instance num 3
+ ip address 6.96.0.189/30
+ serv-type internet
+ ipv6 nd suppress-rs
+ ipv6 address-mode autoconfig prefix-delegation-mode dhcpv6
+ access http
+ access https
+ access telnet
+ access ssh
+ access ping
+!
+interface vxlan2600110
+ bind tunnel28
+ mtu 1300
+ instance num 2
+ ip address 5.100.0.189/30
+ serv-type internet
+ access http
+ access https
+ access telnet
+ access ssh
+ access ping
+!
+address ip pr_dns_detect_dst_720
+!
+ ip host-address 202.106.46.151
+!
+ ip host-address 8.8.8.8
+!
+address ip pr_dns_detect_src_720
+!
+ ip host-address 211.145.41.30
+!
+!
+timerange recurring advance_security_urlf_time_obj
+ periodic 00:00:00 23:59:00 monday tuesday wednesday thursday friday saturday su
+nday
+!
+url-group access					#第一组为跨境业务，dns请求命中后为报文标记 0x66
+ aging time 3600
+ dns server 8.8.8.8					#dns代理到8.8.8.8服务器，优先级高于本地dns
+ nexthop master 5.96.0.190			#根据该下一跳生成跨境策略默认路由
+ source ip 192.168.46.1
+ security ip enable					#使能后，仅指定ip可匹配该组
+ enable 
+ url match suffix 					#域名为后缀匹配模式，示例： www.google.com 和 music.google.com 都可以命中 google.com
+ priority 20 
+ domain name facebook.com			#跨境业务列表，仅列表内业务命中
+ domain name google.com
+ domain name google.com.hk
+exit
+!
+url-group abroad					#第二组为直播业务，dns请求命中后为报文标记 0x67（下一组为0x68，依次类推）
+ aging time 3600
+ dns server 8.8.4.4					#dns代理到8.8.4.4服务器，优先级高于本地dns
+ nexthop master 6.96.0.190			#根据该下一跳生成直播策略默认路由
+ source ip 192.168.46.1
+ security ip enable					#使能后，仅指定ip可匹配该组
+ enable 
+ url match suffix 					#域名为后缀匹配模式，示例： www.google.com 和 music.google.com 都可以命中 google.com
+ priority 200 						#优先级高，两组存在相同域名时优先执行该组策略
+ domain name temu.com				#直播业务列表，仅列表内业务命中
+ domain name google.com
+ domain name tiktok.com
+exit
+!
+l2tp client enable
+l2tp-group ZJNBO-SDWAN-PoP-RT01-RS		#主pop管理通道
+ username rc-571-1-JU0HPFKCSUGAKNXS
+ password secret qckTWH0ZAgyQhNVli7WY49hr06vdtKo93la0uATYoT2OlNOKLvquREXuYHBpPzE
+ peer-address 36.133.95.200
+ peer-port 1701
+ tunnel-name ZJNBO-SDWAN-PoP-RT01-RS
+ iftype client
+ bind if_num 0
+ auto-dial interval 5 times 3
+ dial_on_start enable
+ keepalive timeout enable
+ keepalive timeout 60
+ checksum enable
+ echo-request enable
+ source-port fixed
+l2tp-group ZJNBO-SDWAN-PoP-RT02-RS		#备pop管理通道
+ username rc-571-1-JU0HPFKCSUGAKNXS
+ password secret ILwueoQwsvprqyd45aHUHFTeFeoNDgXT5LI/nmdhifQetwS0IDWIvb6z14zjr61
+ peer-address 36.133.95.202
+ peer-port 1701
+ tunnel-name ZJNBO-SDWAN-PoP-RT02-RS
+ iftype client
+ bind if_num 1
+ auto-dial interval 5 times 3
+ dial_on_start enable
+ keepalive timeout enable
+ keepalive timeout 60
+ checksum enable
+ echo-request enable
+ source-port fixed
+!
+! 
+!
+!
+firewall
+firewall security-level low 
+!
+state_inspect off
+!
+http-filter
+ url dns-server 202.106.46.151 8.8.8.8 
+ url deny template black_list timerange always 
+no http-filter
+!
+template url black_list 
+template url white_list 
+template url keyword_list 
+!
+dhcp
+!
+software acceleration disable								#软件加速功能禁用
+ip route 0.0.0.0/0 211.145.41.254 vrf default 10 1 0
+ip route 8.8.4.4/32 6.96.0.190 vrf default 1 1 0 5			#目的地址为8.8.4.4的报文，路由出接口为 vxlan2510110
+ip route 8.8.8.8/32 5.96.0.190 vrf default 1 1 0 2			#目的地址为8.8.8.8的报文，路由出接口为 vxlan2500110
+ip route 192.168.37.0/24 5.96.0.190 vrf default 5 1 0 3
+ip route 192.168.37.0/24 5.100.0.190 vrf default 8 1 0 4
+!
+!
+!
+!
+ip nat alg gre
+ip nat alg h323
+ip nat alg ipsec
+ip nat alg l2tp
+ip nat alg sip
+ip nat alg rtsp
+ip nat alg ftp
+ip nat source cell any any any interface 110 				#转发报文做源nat
+ip nat source ge1 any any any interface 1 					#转发报文做源nat
+ip nat source l2tpc1 any any any interface 121 
+ip nat source l2tpc0 any any any interface 120 
+!
+proute 720 null pr_dns_detect_src_720 pr_dns_detect_dst_720 any any always 211.145.41.254 vrf Default-IP-Routing-Table
+!
+arp timeout reachable 300
+arp state loose 
+!
+vpn certificate local request  0 host_ip 
+!
+cwmp
+ wan-change-inform disable 
+ first-periodic-inform disable 
+value-change-no-inform disable 
+ no parameter-report 
+ no parameter-report 
+!
+!
+sys-qos global config
+ disable
+ plan prio-weight
+exit
+!
+sys-qos queue config
+exit
+run sys-qos config
+!
+netconf
+callhome sdn_callhome
+ main-url 120.199.236.21
+ main-port 6666
+ username raisecom
+ password secret xFCuxDKKEUgj0u8YYua49I/egoxKg85yWE3QrkBtKDaQcRsEAeAXJCMVKBEJJRA
+ enable
+ exit
+bfd
+detect
+ link detect master vxlan2500110 dest 5.96.0.190 backup vxlan2500110 3 3 2 0 mod
+ule none vrf default none  
+ link detect master vxlan2600110 dest 5.100.0.190 backup vxlan2600110 4 3 2 0 mo
+dule none vrf default none  
+!
+exit
+!
+dns-filter
+ enable
+ policy 1
+  action no-response
+  policy-mode gloable
+  timerange 00:00-00:00
+  weekday 1 2 3 4 5 6 7
+  enable
+nqa
+exit
+!
+nqa
+exit
+!
+nqa
+dns-detect enable
+exit
+!
+smart-link
+smart-route
+priority global
+ disable
+ maininterface  backupinterface 
+ flow 20
+ exit
+exit
+exit
+!end
+host#               
+host# 
+host# show url-group all security-ip 
+url-group access
+ security ip enable
+ 192.168.46.2						#该ip可匹配 access 组
+ 192.168.46.3						#该ip可匹配 access 组
+!
+url-group abroad
+ security ip enable
+ 192.168.46.4						#该ip可匹配 abroad 组
+!
+host# 
+host# 
+host# 
+host# 
+host# show link detect 
+vrf default modulename none groupid 1 master vxlan2500110 dest 5.96.0.190 backup vxlan2500110 3 3 scene_2 up none , 		#显示 vxlan2500110 隧道状态
+vrf default modulename none groupid 2 master vxlan2600110 dest 5.100.0.190 backup vxlan2600110 4 3 scene_2 up none , 		#显示 vxlan2600110 隧道状态
+!
+host# 
+host# 
+host# show interface vlan1
+
+  Interface vlan1 is up, Admin status is up 
+  aliasname vlan1
+  inet addr: 192.168.33.1 Bcast: 192.168.33.255 Mask:255.255.255.0
+  inet addr6: fe80::a23:45ff:fe67:2132 Mask:ffff:ffff:ffff:ffff::
+  ipv6 dns server is 
+  Hardware address: 08:23:45:67:21:32
+  UP BROADCAST PHYUP RUNNING MULTICAST  MTU:1500  Metric:1
+  Last 1 minute input rate: 0 packets/sec, 0 bits/sec
+  Last 1 minute output rate: 0 packets/sec, 0 bits/sec
+  Input: 35803 packets, 3461171 bytes, 185 dropped, 0 errors
+  Output: 3108 packets, 500953 bytes, 0 dropped
+
+host# 
+host# show interface ge1
+
+  Interface ge1 is up, Admin status is up 
+  aliasname WAN1
+  inet addr: 10.10.100.199 Bcast: 10.10.100.255 Mask:255.255.255.0
+  inet addr6: fe80::a23:45ff:fe67:213b Mask:ffff:ffff:ffff:ffff::
+  dns server is 
+  master name-server is 172.16.8.8 
+  Hardware address: 08:23:45:67:21:3b
+  UP BROADCAST PHYUP RUNNING MULTICAST  MTU:1500  Metric:1
+  Physical link is UP, auto negotiation is ON, current speed is 1000M, duplex is FULL, flow-control disabled
+  Media type: twisted pair, Port type: 1000_BASE_T, mac-learning enabled, switch policy: NULL
+  Forwarding mode is NO_SWITCH_PORT, mirror disabled, loopback-detect disabled, loopback not existed
+  Last 1 minute input rate: 183 packets/sec, 922.336 Kbits/sec
+  Last 1 minute output rate: 0 packets/sec, 32 bits/sec
+  Input(swc): 13483152 packets, 4126720091 bytes, 0 broadcast, 0 multicast, 2540 dropped, 0 oam
+  Input(hwc): 0 packets, 0 bytes, 0 CRCs, 0 runts, 0 giants, 0 frames, 0 pauses, 0 filters, 0 overruns, 0 discards
+  Output(swc): 109864 packets, 14081340 bytes, 0 broadcast, 0 multicast, 0 dropped
+  Output(hwc): 0 packets, 0 bytes, 0 pauses, 0 deferred, 0 carriers, 0 collisions, 0 underruns
+
+host# 
+host# 

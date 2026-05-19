@@ -67,6 +67,104 @@ class TestCpeCollectorConfig:
         assert config.password == "secret"
 
 
+class TestViewPasswordResolution:
+    """二次视图口令：设备级、通用文件、登录密码合并顺序。"""
+
+    def test_testnode_device_over_global_over_login(self) -> None:
+        cfg = CpeCollectorConfig(
+            password="L",
+            testnode_password="D",
+            preset_view_passwords={"testnode": "G"},
+        )
+        col = CpeCollector(cfg)
+        assert col._password_for_view("testnode") == "D"
+
+        cfg2 = CpeCollectorConfig(password="L", preset_view_passwords={"testnode": "G"})
+        assert CpeCollector(cfg2)._password_for_view("testnode") == "G"
+
+        cfg3 = CpeCollectorConfig(password="L")
+        assert CpeCollector(cfg3)._password_for_view("testnode") == "L"
+
+    def test_diagnose_preset_then_testnode_chain(self) -> None:
+        cfg = CpeCollectorConfig(
+            password="L",
+            preset_view_passwords={"diagnose": "D", "testnode": "T"},
+        )
+        assert CpeCollector(cfg)._password_for_view("diagnose") == "D"
+
+        cfg2 = CpeCollectorConfig(password="L", preset_view_passwords={"testnode": "T"})
+        assert CpeCollector(cfg2)._password_for_view("diagnose") == "T"
+
+        cfg3 = CpeCollectorConfig(password="L", testnode_password="X")
+        assert CpeCollector(cfg3)._password_for_view("diagnose") == "X"
+
+    def test_default_config_has_empty_preset_map(self) -> None:
+        cfg = CpeCollectorConfig()
+        assert cfg.preset_view_passwords == {}
+
+
+class TestCpeCollectorDiagnosticShellPrompt:
+    """诊断 shell 提示符识别（5200B su 后 busybox root ``#``）。"""
+
+    def test_diagnostic_shell_prompt_seen_bash(self) -> None:
+        col = CpeCollector(
+            CpeCollectorConfig(host="1.1.1.1", username="u", password="p", protocol="telnet")
+        )
+        assert col._diagnostic_shell_prompt_seen("entering shell\nbash-4.4# ")
+
+    def test_diagnostic_shell_prompt_seen_root_hash(self) -> None:
+        col = CpeCollector(
+            CpeCollectorConfig(host="1.1.1.1", username="u", password="p", protocol="telnet")
+        )
+        assert col._diagnostic_shell_prompt_seen("Password:\r\n\r\n# ")
+        assert col._diagnostic_shell_prompt_seen("x\n#")
+
+    def test_diagnostic_shell_prompt_not_host_cli(self) -> None:
+        col = CpeCollector(
+            CpeCollectorConfig(host="1.1.1.1", username="u", password="p", protocol="telnet")
+        )
+        assert not col._diagnostic_shell_prompt_seen("show ver\nhost# ")
+
+
+class TestCpeCollectorPaginationAndRaisecom:
+    """分页清理与 Raisecom url-group 计数。"""
+
+    def test_sanitize_cli_pagination_inline_more(self) -> None:
+        raw = (
+            "tunnel tunnel1_5 \n"
+            "--More-- (14% of 3355 bytes)                             type vxlan source-id soft interval 10\n"
+            " peer 5.0.1.1\n"
+        )
+        out = CpeCollector._sanitize_cli_pagination(raw)
+        assert "--More--" not in out
+        assert "type vxlan source-id soft interval 10" in out
+        assert "tunnel tunnel1_5" in out
+
+    def test_raisecom_url_group_count(self) -> None:
+        cfg = "!config\nurl-group a\nexit\nurl-group b\nexit\n"
+        assert CpeCollector._raisecom_url_group_count(cfg) == 2
+        assert CpeCollector._raisecom_url_group_count("no url-group") == 0
+
+
+class TestCpeCollectorTelnetRciOsPrompt:
+    """RCIOS Telnet 行尾提示符：须同时识别默认 host 与自定义 hostname。"""
+
+    def test_telnet_prompt_regex_host_and_custom_name(self) -> None:
+        cfg = CpeCollectorConfig(host="1.1.1.1", username="u", password="p", protocol="telnet")
+        col = CpeCollector(cfg)
+        assert col._telnet_prompt_regex.search("x\nhost# ")
+        assert col._telnet_prompt_regex.search("x\nhost> ")
+        assert col._telnet_prompt_regex.search("x\ncpe-name# ")
+        assert col._telnet_prompt_regex.search("x\ncpe-name(test-node)# ")
+        assert col._telnet_prompt_regex.search("x\nbash-4.3# ")
+
+    def test_raisecom_user_exec_prompt(self) -> None:
+        cfg = CpeCollectorConfig(host="1.1.1.1", username="u", password="p", protocol="telnet")
+        col = CpeCollector(cfg)
+        assert col._raisecom_user_exec_prompt.search("banner\ncpe-name> ")
+        assert col._raisecom_user_exec_prompt.search("host> ")
+
+
 class TestCpeCollectorValidation:
     """CPE 采集器配置验证测试"""
     
@@ -385,6 +483,26 @@ class TestCpeCollectorFullCollection:
         
         assert result.success is False
         assert "采集失败" in result.error_message
+
+
+class TestCpeCollectorTelnetRead:
+    """Telnet 读循环：EOF 须立即失败，避免空转直至总超时。"""
+
+    @pytest.mark.asyncio
+    async def test_read_until_any_eof_raises(self) -> None:
+        cfg = CpeCollectorConfig(
+            host="10.0.0.1",
+            port=23,
+            username="u",
+            password="p",
+            protocol="telnet",
+        )
+        col = CpeCollector(cfg)
+        mock_reader = MagicMock()
+        mock_reader.read = AsyncMock(return_value="")
+        col._telnet_reader = mock_reader
+        with pytest.raises(ConnectionError, match="EOF"):
+            await col._read_until_any([col._telnet_prompt_regex], timeout=5)
 
 
 class TestCpeCollectorSupportedItems:

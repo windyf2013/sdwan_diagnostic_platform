@@ -1,0 +1,1699 @@
+{# 业务路径联合等带 topology.report_html_h1 的场景专用；deep_dive.html 保留供纯深度诊断与验收对比。#}
+{% extends "base.html" %}
+{% import "partials/topology_cartoon.html" as topoc %}
+
+{% set _joint_title = topology.get('report_html_title') if topology else none %}
+{% block title %}{{ _joint_title or 'SD-WAN 深度诊断报告' }}{% endblock %}
+
+{% block content %}
+{% set _bj_suppress = topology.get('business_joint_suppress_overlay_topology_presentation', false) if topology else false %}
+{% set _bj_has_ct = topology.get('report_joint_nf_conntrack_had_session_lines', false) if topology else false %}
+{% set _joint_ux = topology is not none and topology.get('report_html_h1') %}
+{# 报告 ID = DiagnosisResult.id（UUID，本份诊断结果对象）。Trace ID = 当次运行/Flow 会话 id（UUID，与 CLI 输出、JSON、日志 extra 对齐）。反查：同次导出的 JSON、日志中 grep trace_id；报告 id 对应内存/落库中的诊断结果主键（若未建库则仅本文件内标识）。#}
+<!-- 报告头部：不展示 report_html_h1_note（探测/采集说明在下方「探测结论」） -->
+<div class="header">
+    {% set _joint_h1 = topology.get('report_html_h1') if topology else none %}
+    <h1>{% if _joint_h1 %}{{ _joint_h1 }}{% else %}🔬 SD-WAN 深度诊断报告{% endif %}</h1>
+    <div class="meta-info{% if _joint_ux %} meta-info--joint{% endif %}">
+        {% if _joint_ux and topology.get('report_html_business_targets_line') %}
+        <div class="meta-item">
+            <div class="meta-label">业务目标</div>
+            <div class="meta-value meta-value--prose">{{ topology.get('report_html_business_targets_line') }}</div>
+        </div>
+        {% endif %}
+        <div class="meta-item">
+            <div class="meta-label">报告 ID</div>
+            <div class="meta-value meta-value--mono">{{ report_id }}</div>
+        </div>
+        <div class="meta-item">
+            <div class="meta-label">Trace ID</div>
+            <div class="meta-value meta-value--mono">{{ trace_id }}</div>
+        </div>
+        <div class="meta-item">
+            <div class="meta-label">生成时间</div>
+            <div class="meta-value meta-value--prose">{{ generated_at }}</div>
+        </div>
+        <div class="meta-item">
+            <div class="meta-label">诊断类型</div>
+            <div class="meta-value meta-value--prose">{{ (topology.get('report_diagnosis_label') or diagnosis_type) if topology else diagnosis_type }}</div>
+        </div>
+        <div class="meta-item">
+            <div class="meta-label">规则版本</div>
+            <div class="meta-value meta-value--mono">{{ rule_version }}</div>
+        </div>
+    </div>
+</div>
+
+{% if _joint_ux %}
+{% set _po = topology.get('report_joint_probe_outcome') if topology else none %}
+<div id="report-joint-outcome" class="report-joint-hero report-joint-hero--{{ severity.value }}">
+    <div class="report-joint-hero-bar">
+        <span class="report-joint-verdict">探测结论</span>
+        <span class="severity-badge severity-{{ severity.value }}">{{ severity.value | upper }}</span>
+    </div>
+    {% if _po %}
+    {# 阅读顺序：现象与主判断优先；主叙述为辅文；待核对默认折叠（P1 全区块折叠策略下首屏更干净） #}
+    <dl class="report-joint-probe-dl report-joint-probe-dl--lead">
+        {# 可达/不可达统一版式：现象 + 主判断两行始终占位，避免读者对比两份报告时结构漂移 #}
+        <div class="report-joint-probe-row">
+            <dt>探测现象</dt>
+            <dd>{{ _po.phenomenon }}</dd>
+        </div>
+        <div class="report-joint-probe-row{% if _po.primary_fault %} report-joint-probe-row--fault{% endif %}">
+            <dt>主故障判断</dt>
+            <dd>
+                {% if _po.primary_fault %}
+                <strong class="report-joint-primary-fault">{{ _po.primary_fault }}</strong>
+                {% else %}
+                <span class="report-joint-primary-fault-muted">无（本机 DNS/TCP 探针未发现阻塞项）</span>
+                {% endif %}
+            </dd>
+        </div>
+        {% if _po.ruled_out and _po.ruled_out|length > 0 %}
+        <div class="report-joint-probe-row">
+            <dt>已排除（弱否定）</dt>
+            <dd>
+                <ul class="report-joint-ruled-out">
+                    {% for it in _po.ruled_out %}
+                    <li>{{ it }}</li>
+                    {% endfor %}
+                </ul>
+            </dd>
+        </div>
+        {% endif %}
+    </dl>
+
+    {% if _po.primary_narrative %}
+    <p class="report-joint-narrative">{{ _po.primary_narrative }}</p>
+    {% endif %}
+
+    {% if _po.secondary_findings and _po.secondary_findings|length > 0 %}
+    <details class="report-joint-secondary-details">
+        <summary class="report-joint-secondary-summary">待核对项（非主因，{{ _po.secondary_findings|length }} 条）— 点击展开</summary>
+        <div class="report-joint-secondary">
+            <ul>
+                {% for f in _po.secondary_findings %}
+                <li>
+                    <strong>[{{ f.id }}]</strong>
+                    <span class="report-joint-secondary-label">{{ f.label }}</span>
+                    <div class="report-joint-secondary-note">{{ f.note }}</div>
+                </li>
+                {% endfor %}
+            </ul>
+        </div>
+    </details>
+    {% endif %}
+
+    {# 探测明细（折叠层）：保留 DNS/TCP/Traceroute 原始判定行，供工程师下钻 #}
+    <details class="report-joint-tech-details">
+        <summary>展开探测明细（探测目标 / 方法 / 每目标 DNS·TCP·Traceroute 结果）</summary>
+        <dl class="report-joint-probe-dl report-joint-probe-dl--tech">
+            <div class="report-joint-probe-row">
+                <dt>探测任务目标</dt>
+                <dd>{{ _po.targets_line }}</dd>
+            </div>
+            <div class="report-joint-probe-row">
+                <dt>探测方法</dt>
+                <dd>{{ _po.methods_line }}</dd>
+            </div>
+            <div class="report-joint-probe-row">
+                <dt>整体探测结果</dt>
+                <dd>
+                    <span class="report-joint-probe-result report-joint-probe-result--{{ _po.overall }}">{{ _po.result_line }}</span>
+                    {% for rs in _po.results %}
+                    <div class="report-joint-probe-target-line">
+                        <strong class="font-mono">{{ rs.target }}</strong> —
+                        DNS {{ rs.dns_status }}{% if rs.dns_ips %}（{{ rs.dns_ips }}）{% endif %}；
+                        TCP {{ rs.tcp_status }}{% if rs.tcp_detail and rs.tcp_detail != '—' %}：{{ rs.tcp_detail }}{% endif %}；
+                        Traceroute {{ rs.trace_status }}{% if rs.trace_detail and rs.trace_detail != '—' %}：{{ rs.trace_detail }}{% endif %}
+                    </div>
+                    {% endfor %}
+                </dd>
+            </div>
+        </dl>
+    </details>
+    {% else %}
+    <p class="report-joint-one-liner">{{ summary }}</p>
+    {% endif %}
+    <div class="report-joint-meta-row">
+        <span>综合置信度 <strong>{{ confidence }}%</strong></span>
+        {% if summary and not _po %}<span class="report-joint-meta-muted"> · {{ summary }}</span>{% endif %}
+    </div>
+</div>
+{% endif %}
+
+<!-- 快速导航栏 -->
+<div class="quick-nav">
+    <span class="quick-nav-title">📑 快速导航:</span>
+    <a href="#topology" class="nav-chip" data-expand-section="topology">🕸️ 网络拓扑</a>
+    {% if topology is defined and topology and topology.edges %}
+    <a href="#topology-links" class="nav-chip" data-expand-section="topology">链路一览</a>
+    {% endif %}
+    {% if topology is defined and topology and topology.nodes %}
+    <a href="#topology-nodes" class="nav-chip" data-expand-section="topology">节点详情</a>
+    {% endif %}
+    {% if topology is defined and topology and topology.commercial_delivery is defined and topology.commercial_delivery %}
+    <a href="#delivery" class="nav-chip" data-expand-section="delivery">📋 交付摘要</a>
+    {% endif %}
+    <a href="#root-causes" class="nav-chip{% if root_causes and root_causes|length > 0 %} critical{% endif %}" data-expand-section="root-causes">🔴 根因分析{% if root_causes and root_causes|length > 0 %} ({{ root_causes|length }}){% endif %}</a>
+    <a href="#evidence-chain" class="nav-chip" data-expand-section="evidence-chain">📎 证据链与明细</a>
+    {% if report_pack is defined and report_pack %}
+    <a href="#report-product-scope" class="nav-chip">报告定位</a>
+    {% endif %}
+</div>
+
+{% if _joint_ux %}<div class="joint-ux-reorder">{% endif %}
+<!-- 网络拓扑结构 -->
+<div class="section{% if _joint_ux %} joint-ux-order-1 joint-ux-section-compact{% endif %}" id="topology">
+    <div class="section-header collapsible collapsed">
+        <h2>🕸️ 网络拓扑结构</h2>
+    </div>
+    <div class="section-content collapse-content hidden">
+        {# 图后说明：抑制 Overlay 条带 / 显式 overlay 占位 #}
+        {% set _lod_ph = topology.layout_overlay_placeholder | default('', true) %}
+        {% set _topo_uncertain = (
+            (_bj_suppress | default(false))
+            or ((_lod_ph | string | trim) | length > 0)
+        ) %}
+
+        <div id="topology-container" class="topology-strip-wrap topology-ref-stage">
+            {% if topology.get('topology_presentation_note') %}
+            <p class="topology-ref-underlay-hint" style="margin: 0 0 12px;">{{ topology.get('topology_presentation_note') }}</p>
+            {% endif %}
+            {% set uitems = topology.layout_underlay_items | default([], true) %}
+            {% if (uitems | length) > 0 %}
+            <div class="topology-ref-layer-title">Underlay（公网 / 物理可达）</div>
+            <div class="topology-flow">
+                {% for item in uitems %}
+                    {% if item.kind == 'node' %}
+                        {% set node = item.node %}
+                        {{ topoc.cartoon_underlay_node(node, topology) }}
+                    {% elif item.kind == 'hop' %}
+                        {% set hop_conn = item.connection | default('indirect') %}
+                        {% if item.problem %}
+                        {% set _hop_title = '本段在联合判定下视为不可达 / 故障路径（业务或观测证据）' %}
+                        {% elif hop_conn == 'direct' %}
+                        {% set _hop_title = '直连段' %}
+                        {% elif _bj_suppress and _bj_has_ct %}
+                        {% set _hop_title = '经 L3 路由（本轮已采样到声明目的地址 conntrack 会话，未绑定隧道示意）' %}
+                        {% elif _bj_suppress %}
+                        {% set _hop_title = '经 L3 路由（本轮未见声明目的地址 conntrack 非空行，未绑定隧道示意）' %}
+                        {% else %}
+                        {% set _hop_title = '经路由或隧道域（非二层直连示意）' %}
+                        {% endif %}
+                        {{ topoc.cartoon_connector(hop_conn, item.problem, _hop_title) }}
+                    {% endif %}
+                {% endfor %}
+            </div>
+            {% if _topo_uncertain or topology.get('topology_underlay_trimmed') %}
+            <p class="topology-ref-underlay-hint">{% if _topo_uncertain %}节点间为路径示意；灰色连接符表示逻辑可达（非物理线缆）。{% endif %}{% if topology.get('topology_underlay_trimmed') %}{% if _topo_uncertain %}<br/>{% endif %}已按<strong>首轮失败点</strong>裁剪：仅保留至问题节点为止的路径示意。{% endif %}</p>
+            {% endif %}
+            {% elif (topology.layout_underlay_nodes | default([], true)) | length > 0 %}
+            <div class="topology-ref-layer-title">Underlay（公网 / 物理可达）</div>
+            <div class="topology-flow">
+                {% for node in topology.layout_underlay_nodes | default([], true) %}
+                {{ topoc.cartoon_underlay_node(node, topology) }}
+                {% if not loop.last %}
+                {% set _next_ul = topology.layout_underlay_nodes[loop.index0 + 1] %}
+                {% set _prob_ul = topology.problem_node_ids is defined and topology.problem_node_ids and (_next_ul.id in topology.problem_node_ids) %}
+                {{ topoc.cartoon_connector('indirect', _prob_ul, '本段判定为不可达 / 故障路径' if _prob_ul else '逻辑路径') }}
+                {% endif %}
+                {% endfor %}
+            </div>
+            {% if _topo_uncertain or topology.get('topology_underlay_trimmed') %}
+            <p class="topology-ref-underlay-hint">{% if _topo_uncertain %}节点间为路径示意；灰色连接符表示逻辑可达（非物理线缆）。{% endif %}{% if topology.get('topology_underlay_trimmed') %}{% if _topo_uncertain %}<br/>{% endif %}已按<strong>首轮失败点</strong>裁剪：仅保留至问题节点为止的路径示意。{% endif %}</p>
+            {% endif %}
+            {% elif topology.nodes %}
+            <div class="topology-ref-layer-title">Underlay（公网 / 物理可达）</div>
+            <div class="topology-flow">
+                {% for node in topology.nodes %}
+                {{ topoc.cartoon_underlay_node(node, topology) }}
+                {% if not loop.last %}
+                {% set _next_nd = topology.nodes[loop.index0 + 1] %}
+                {% set _prob_nd = topology.problem_node_ids is defined and topology.problem_node_ids and (_next_nd.id in topology.problem_node_ids) %}
+                {{ topoc.cartoon_connector('indirect', _prob_nd, '本段判定为不可达 / 故障路径' if _prob_nd else '逻辑路径') }}
+                {% endif %}
+                {% endfor %}
+            </div>
+            {% if _topo_uncertain or topology.get('topology_underlay_trimmed') %}
+            <p class="topology-ref-underlay-hint">{% if _topo_uncertain %}节点间为路径示意；灰色连接符表示逻辑可达（非物理线缆）。{% endif %}{% if topology.get('topology_underlay_trimmed') %}{% if _topo_uncertain %}<br/>{% endif %}已按<strong>首轮失败点</strong>裁剪：仅保留至问题节点为止的路径示意。{% endif %}</p>
+            {% endif %}
+            {% else %}
+            <div style="color: var(--text-secondary); text-align:center;">暂无可展示的拓扑节点</div>
+            {% endif %}
+
+            {% if _bj_suppress %}
+            <div class="topology-ref-layer-title" style="margin-top: 20px;">Overlay / 隧道（设备侧）</div>
+            <div class="topology-placeholder" style="font-size: 0.9em; line-height: 1.55; color: var(--text-secondary); padding: 10px 12px;">
+                {% set _suppress_reason = topology.get('joint_overlay_suppress_reason', '') %}
+                {% if _suppress_reason %}
+                {{ _suppress_reason }}故<strong>不展示</strong> CPE↔Hub 隧道示意条（仅保留 Underlay 示意）。若需进一步专检请使用 <code>agentctl deep-dive</code>。
+                {% else %}
+                本轮对声明业务目的地址的 nf_conntrack 采样<strong>未见非空会话行</strong>：在本工具当前可观测子集内，<strong>无法</strong>将声明业务流与 CPE↔Hub 隧道/Overlay 面建立观测关联，故<strong>不展示</strong>隧道示意条（仅保留 Underlay 示意）。
+                若设备上确有相关流，请扩大采样或改用 <code>agentctl deep-dive</code> 专检。
+                {% endif %}
+            </div>
+            {% else %}
+            <div class="topology-ref-overlay-band">
+                <div class="topology-ref-layer-title topology-ref-layer-title--overlay">Overlay（隧道内层 / 设备侧）</div>
+                {% if topology.layout_overlay | default(none) %}
+                <div class="topology-flow topology-flow-overlay">
+                    {{ topoc.cartoon_overlay_cpe(topology) }}
+                    {{ topoc.cartoon_overlay_tunnel_curve(topology.overlay_problem) }}
+                    {{ topoc.cartoon_overlay_hub(topology) }}
+                </div>
+                {% if topology.get('joint_overlay_topology_note') %}
+                <div class="topology-overlay-note">{{ topology.get('joint_overlay_topology_note') }}</div>
+                {% endif %}
+                {% if topology.overlay_problem %}
+                <div class="topology-overlay-problem">Overlay 故障段：{{ topology.overlay_problem.layer }} · {{ topology.overlay_problem.reason }}</div>
+                {% endif %}
+                {% if _topo_uncertain and topology.layout_overlay.overlay_encap_note %}
+                <div class="topology-overlay-note">{{ topology.layout_overlay.overlay_encap_note }}</div>
+                {% endif %}
+                {% elif topology.layout_overlay_placeholder %}
+                <div class="topology-placeholder">{{ topology.layout_overlay_placeholder }}</div>
+                {% elif _topo_uncertain %}
+                <div class="topology-placeholder">暂无 Overlay。</div>
+                {% endif %}
+            </div>
+            {% endif %}
+
+            {% include "partials/topology_detail_tables.html" %}
+        </div>
+    </div>
+</div>
+
+{% if topology.commercial_delivery is defined and topology.commercial_delivery %}
+{% set cd = topology.commercial_delivery %}
+<div class="section{% if _joint_ux %} joint-ux-order-2{% endif %}" id="delivery">
+    <div class="section-header collapsible collapsed">
+        <h2>📋 交付摘要（阅读层）</h2>
+    </div>
+    <div class="section-content collapse-content hidden">
+        <div class="info-box info delivery-info-box">
+            <div class="info-box-title">主叙述与阅读边界</div>
+            <div class="info-box-content">
+                <p class="delivery-headline">{{ cd.headline }}</p>
+                <p class="delivery-subline">{{ cd.subline }}</p>
+            </div>
+        </div>
+
+        {% if cd.checklist %}
+        <div class="info-box" style="margin-bottom: 14px;">
+            <div class="info-box-title">核查表（证据对齐）</div>
+            <div class="info-box-content">
+                <table style="margin-top: 8px; width: 100%; border-collapse: collapse; font-size: 0.9em;">
+                    <thead>
+                        <tr style="border-bottom: 1px solid #ccc;">
+                            <th style="text-align: left; padding: 6px 8px;">项</th>
+                            <th style="text-align: left; padding: 6px 8px;">结论</th>
+                            <th style="text-align: left; padding: 6px 8px;">说明</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in cd.checklist %}
+                        <tr style="border-bottom: 1px solid #eee;">
+                            <td style="padding: 6px 8px; vertical-align: top;"><span class="font-mono">{{ row.id }}</span> {{ row.label }}</td>
+                            <td style="padding: 6px 8px; vertical-align: top;">{{ row.status }}</td>
+                            <td style="padding: 6px 8px; vertical-align: top;">{{ row.detail }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% endif %}
+
+        {% if cd.tunnel_peer_probes and cd.tunnel_peer_probes|length > 0 %}
+        <div class="info-box success" style="margin-bottom: 14px;">
+            <div class="info-box-title">隧道对端 ICMP 探针摘要</div>
+            <div class="info-box-content">
+                <p style="margin: 4px 0 10px; font-size: 0.9em;">仅探测隧道 peer，不对业务目的地址做 ICMP；详细输出见「证据链与明细」中的拓扑后主动探测。</p>
+                <table style="width: 100%; border-collapse: collapse; font-size: 0.9em;">
+                    <thead>
+                        <tr style="border-bottom: 1px solid #ccc;">
+                            <th style="text-align: left; padding: 6px 8px;">Peer</th>
+                            <th style="text-align: left; padding: 6px 8px;">状态</th>
+                            <th style="text-align: left; padding: 6px 8px;">摘要</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for r in cd.tunnel_peer_probes %}
+                        <tr style="border-bottom: 1px solid #eee;">
+                            <td style="padding: 6px 8px; vertical-align: top;" class="font-mono">{{ r.peer_ip }}</td>
+                            <td style="padding: 6px 8px; vertical-align: top;">{{ r.status }}</td>
+                            <td style="padding: 6px 8px; vertical-align: top; word-break: break-all;">{{ r.summary_line }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% endif %}
+
+        {% if cd.notices and cd.notices|length > 0 %}
+        <div class="info-box info" style="margin-bottom: 14px;">
+            <div class="info-box-title">消歧与注意事项（INFO）</div>
+            <div class="info-box-content">
+                <ul style="margin: 0; padding-left: 1.2em;">
+                    {% for n in cd.notices %}
+                    <li style="margin: 6px 0; line-height: 1.5;">{{ n }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
+        </div>
+        {% endif %}
+
+        {% if cd.recommended_actions and cd.recommended_actions|length > 0 %}
+        <div class="info-box info">
+            <div class="info-box-title">建议动作（交付侧）</div>
+            <div class="info-box-content">
+                <ol style="margin: 0; padding-left: 1.2em;">
+                    {% for a in cd.recommended_actions %}
+                    <li style="margin: 6px 0; line-height: 1.5;">{{ a }}</li>
+                    {% endfor %}
+                </ol>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endif %}
+
+<!-- 根因分析 -->
+{% if root_causes %}
+<div class="section{% if _joint_ux %} joint-ux-order-3 joint-ux-root-highlight{% endif %}" id="root-causes">
+    <div class="section-header collapsible collapsed">
+        <h2>🔴 根因分析</h2>
+        <span class="badge-count" style="background: var(--color-critical);">{{ root_causes | length }} 个问题</span>
+    </div>
+    <div class="section-content collapse-content hidden">
+        {% if _joint_ux %}
+        <p class="joint-root-cause-scope" style="margin: 0 0 12px; font-size: 0.9em; color: var(--text-secondary); line-height: 1.55;">
+            根因卡片须写清判断依据；涉及 5200B 会话与隧道判定的<strong>启发式</strong>说明放在本区块与证据链，不在页首结论区展开。
+        </p>
+        {% endif %}
+        {% for cause in root_causes %}
+        <div class="card" style="border-left: 4px solid {% if cause.severity.value == 'critical' %}var(--color-critical){% elif cause.severity.value == 'error' %}var(--color-error){% else %}var(--color-warning){% endif %};">
+            <div class="card-header">
+                <div class="card-title">[{{ cause.cause_id }}] {{ cause.title }}</div>
+                <span class="severity-badge severity-{{ cause.severity.value }}">{{ cause.severity.value | upper }}</span>
+            </div>
+            <div class="card-description">{{ cause.description }}</div>
+            <div class="card-meta">
+                <div class="card-meta-item">
+                    <span class="card-meta-label">置信度:</span>
+                    <span>{{ "%.0f"|format(cause.confidence * 100) }}%</span>
+                </div>
+                <div class="card-meta-item">
+                    <span class="card-meta-label">匹配规则:</span>
+                    <span class="font-mono">{{ cause.matched_rules | join(', ') }}</span>
+                </div>
+                {% if cause.evidence_refs %}
+                <div class="card-meta-item">
+                    <span class="card-meta-label">证据引用（命令/数据源线索）:</span>
+                    <span class="font-mono" style="display:block;margin-top:6px;line-height:1.5;">{{ cause.evidence_refs | join(' · ') }}</span>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% else %}
+<div class="section{% if _joint_ux %} joint-ux-order-3 joint-ux-root-highlight{% endif %}" id="root-causes">
+    <div class="section-header collapsible collapsed">
+        <h2>🔴 根因分析</h2>
+    </div>
+    <div class="section-content collapse-content hidden">
+        <div class="summary-box success">
+            <p style="font-size: 1.2em;">✅ 未检测到明显的配置或连通性故障。</p>
+            <p style="margin-top: 10px; color: var(--text-secondary);">系统运行正常，无需特殊操作。</p>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<div class="section{% if _joint_ux %} joint-ux-order-4 joint-ux-section-compact{% endif %}" id="evidence-chain">
+    <div class="section-header collapsible collapsed">
+        <h2>📎 证据链与明细</h2>
+        <span class="badge-count">采集与核对</span>
+    </div>
+    <div class="section-content collapse-content hidden">
+        {% if topology.hints %}
+        <div class="info-box info" style="margin-top: 4px;">
+            <div class="info-box-title">📌 关键信息（CPE）</div>
+            <div class="info-box-content">
+                <ul style="margin: 0; padding-left: 1.2em;">
+                    {% for line in topology.hints %}
+                    <li style="margin: 4px 0;">{{ line }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
+        </div>
+        {% endif %}
+        {% if topology.overlay_policy_flow is defined and topology.overlay_policy_flow %}
+        {% set opf = topology.overlay_policy_flow %}
+        {% set opd = opf.data if opf.data is mapping else {} %}
+        <div class="info-box info" style="margin-top: 12px;">
+            <div class="info-box-title">Overlay 与策略分流（分析流程）</div>
+            <div class="info-box-content">
+                <p style="margin: 4px 0;"><strong>状态:</strong> {{ opf.status }}{% if opf.error %} · {{ opf.error }}{% endif %}</p>
+                {% if opd %}
+                <p style="margin: 4px 0;"><strong>组网归纳:</strong> {{ opd.scenario_label | default('—') }}</p>
+                {% if opd.scenario_tags %}
+                <p style="margin: 4px 0;"><strong>标签:</strong> <span class="font-mono">{{ opd.scenario_tags | join(', ') }}</span></p>
+                {% endif %}
+                {% if opd.forwarding_note %}
+                <p style="margin: 8px 0 4px 0;"><strong>转发抽象:</strong> {{ opd.forwarding_note }}</p>
+                {% endif %}
+                {% if opd.checklist %}
+                <p style="margin: 8px 0 4px 0;"><strong>核对清单:</strong></p>
+                <ul style="margin: 0; padding-left: 1.2em;">
+                    {% for line in opd.checklist %}
+                    <li style="margin: 4px 0;">{{ line }}</li>
+                    {% endfor %}
+                </ul>
+                {% endif %}
+                {% if opd.probe_evidence_notes %}
+                <p style="margin: 8px 0 4px 0;"><strong>证据提示:</strong></p>
+                <ul style="margin: 0; padding-left: 1.2em;">
+                    {% for line in opd.probe_evidence_notes %}
+                    <li style="margin: 4px 0;">{{ line }}</li>
+                    {% endfor %}
+                </ul>
+                {% endif %}
+                {% endif %}
+            </div>
+        </div>
+        {% endif %}
+        {% if topology.get('joint_path_evidence') %}
+        {% set jpe = topology.joint_path_evidence %}
+        {% set l1 = jpe.l1_session if jpe.l1_session is mapping else {} %}
+        {% set l3 = jpe.l3_fib if jpe.l3_fib is mapping else {} %}
+        <div class="info-box info" style="margin-top: 12px;">
+            <div class="info-box-title">路径旁证（L1 会话 · L3 FIB）</div>
+            <div class="info-box-content" style="font-size: 0.9em; line-height: 1.55;">
+                <p style="margin: 4px 0;"><strong>门控分支:</strong> <span class="font-mono">{{ jpe.rule_case | default('—') }}</span>
+                    · <strong>层级:</strong> {{ jpe.evidence_tier_label | default(jpe.evidence_tier) }}</p>
+                {% if l1.summary %}
+                <p style="margin: 8px 0 4px 0;"><strong>L1 会话（nf_conntrack 双向）:</strong> {{ l1.summary }}</p>
+                {% if l1.sample_lines %}
+                <details style="margin-top: 6px;">
+                    <summary style="cursor: pointer;">L1 关键会话行（节选）</summary>
+                    <pre style="margin-top: 6px; max-height: 180px; overflow: auto; font-size: 0.82em;">{% for line in l1.sample_lines %}{{ line }}
+{% endfor %}</pre>
+                </details>
+                {% endif %}
+                {% endif %}
+                {% if l3.summary %}
+                <p style="margin: 8px 0 4px 0;"><strong>L3 FIB:</strong> {{ l3.summary }}
+                    {% if l3.egress_dev %}<span class="font-mono">dev={{ l3.egress_dev }}</span>{% endif %}
+                    {% if l3.table_id %} · 表 {{ l3.table_id }}{% endif %}</p>
+                {% if l3.excerpts %}
+                <details style="margin-top: 6px;">
+                    <summary style="cursor: pointer;">路由表节选（main / table 99/100）</summary>
+                    <pre style="margin-top: 6px; max-height: 160px; overflow: auto; font-size: 0.82em;">{% for line in l3.excerpts %}{{ line }}
+{% endfor %}</pre>
+                </details>
+                {% endif %}
+                {% endif %}
+            </div>
+        </div>
+        {% endif %}
+        {% if topology.get('pc_snapshot') %}
+        {% set pcs = topology.pc_snapshot %}
+        <div class="info-box info" id="pc-snapshot" style="margin-top: 12px;">
+            <div class="info-box-title">PC 快照（诊断采集）</div>
+            <div class="info-box-content" style="font-size: 0.9em; line-height: 1.55;">
+                {% if pcs.hostname or pcs.os_version or pcs.architecture %}
+                <p style="margin: 0 0 8px;"><strong>主机</strong>：{{ pcs.hostname or '—' }}{% if pcs.os_version %} · {{ pcs.os_version }}{% endif %}{% if pcs.architecture %} · {{ pcs.architecture }}{% endif %}</p>
+                {% endif %}
+                {% if pcs.adapters %}
+                <div style="margin-top: 10px;"><strong>网卡</strong>（{{ pcs.adapters|length }}）</div>
+                <table style="margin-top: 6px; width: 100%; font-size: 0.88em;">
+                    <thead>
+                        <tr>
+                            <th>名称</th>
+                            <th>状态</th>
+                            <th>IP / 网关</th>
+                            <th>DNS</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for ad in pcs.adapters %}
+                        <tr>
+                            <td class="font-mono">{{ ad.name or '—' }}</td>
+                            <td>{% if ad.is_connected %}已连接{% else %}未连接{% endif %}</td>
+                            <td class="font-mono" style="line-height:1.45;">
+                                {% if ad.ip_addresses %}{{ ad.ip_addresses | join(', ') }}{% else %}—{% endif %}
+                                {% if ad.default_gateway %}<br/><span style="color:#64748b;">GW {{ ad.default_gateway }}</span>{% endif %}
+                            </td>
+                            <td class="font-mono">{% if ad.dns_servers %}{{ ad.dns_servers | join(', ') }}{% else %}—{% endif %}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                {% endif %}
+                {% if pcs.routes %}
+                <div style="margin-top: 12px;"><strong>路由表</strong>（节选 {{ [pcs.routes|length, 12]|min }} / {{ pcs.routes|length }}）</div>
+                <ul style="margin: 6px 0 0; padding-left: 1.2em;">
+                    {% for r in pcs.routes[:12] %}
+                    <li class="font-mono" style="margin-bottom: 4px;">{{ r.destination or '0.0.0.0' }}/{{ r.netmask or '0.0.0.0' }} → {{ r.gateway or '—' }} · {{ r.interface or '—' }}{% if r.metric %} · metric {{ r.metric }}{% endif %}</li>
+                    {% endfor %}
+                </ul>
+                {% endif %}
+                {% set _dns = pcs.dns_config if pcs.dns_config is mapping else none %}
+                {% if _dns and (_dns.servers or _dns.primary_dns_suffix) %}
+                <div style="margin-top: 12px;"><strong>系统 DNS</strong>：{% if _dns.servers %}<span class="font-mono">{{ _dns.servers | join(', ') }}</span>{% else %}—{% endif %}{% if _dns.primary_dns_suffix %} · 后缀 {{ _dns.primary_dns_suffix }}{% endif %}</div>
+                {% endif %}
+                {% set _px = pcs.proxy_config if pcs.proxy_config is mapping else none %}
+                {% if _px %}
+                <div style="margin-top: 8px;"><strong>代理</strong>：{% if _px.enabled %}已启用{% if _px.server %} · <span class="font-mono">{{ _px.server }}</span>{% endif %}{% if _px.auto_config_url %} · PAC {{ _px.auto_config_url }}{% endif %}{% else %}未启用{% endif %}</div>
+                {% endif %}
+            </div>
+        </div>
+        {% elif topology.pc_snapshot_included is defined %}
+        <div class="info-box {% if topology.pc_snapshot_included %}success{% else %}warning{% endif %}" style="margin-top: 12px;">
+            <div class="info-box-title">PC 快照</div>
+            <div class="info-box-content">
+                {% if topology.pc_snapshot_included %}
+                已标记纳入 PC 快照，但本报告未携带明细载荷。
+                {% else %}
+                未采集 PC 快照，客户端侧结论可能受限。
+                {% endif %}
+            </div>
+        </div>
+        {% endif %}
+        {% if "targeted_probe" in topology and topology["targeted_probe"] %}
+        {% set tp = topology["targeted_probe"] %}
+        <div class="info-box info" style="margin-top: 12px;">
+            <div class="info-box-title">拓扑后主动探测</div>
+            <div class="info-box-content">
+                <p style="margin: 4px 0;"><strong>状态:</strong> {{ tp.status }}</p>
+                {% if tp.error %}
+                <p style="margin: 4px 0; color: var(--warning);"><strong>说明:</strong> {{ tp.error }}</p>
+                {% endif %}
+                {% if tp.data is mapping %}
+                {% set biz = tp.data.get('business_probes') %}
+                {% if biz %}
+                <details style="margin-top: 8px;">
+                    <summary style="cursor: pointer;">业务探测（DNS A + TCP + Traceroute）</summary>
+                    <table style="margin-top: 8px; width: 100%; border-collapse: collapse; font-size: 0.9em;">
+                        <thead>
+                            <tr style="text-align: left; border-bottom: 1px solid var(--border);">
+                                <th style="padding: 4px 8px;">域名</th>
+                                <th style="padding: 4px 8px;">端口</th>
+                                <th style="padding: 4px 8px;">DNS</th>
+                                <th style="padding: 4px 8px;">TCP</th>
+                                <th style="padding: 4px 8px;">Traceroute</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for row in biz %}
+                            <tr style="vertical-align: top; border-bottom: 1px solid var(--border);">
+                                <td style="padding: 6px 8px;" class="font-mono">{{ row.domain }}</td>
+                                <td style="padding: 6px 8px;">{{ row.port }}</td>
+                                <td style="padding: 6px 8px;">
+                                    {% set d = row.dns %}
+                                    <span>{{ d.status }}</span>
+                                    {% if d.data and d.data.resolved_ips %}
+                                    <div class="font-mono" style="margin-top: 4px;">{{ d.data.resolved_ips | join(', ') }}</div>
+                                    {% endif %}
+                                    {% if d.error %}<div style="color: var(--warning); margin-top: 4px;">{{ d.error }}</div>{% endif %}
+                                </td>
+                                <td style="padding: 6px 8px;">
+                                    {% for t in row.tcp %}
+                                    <div style="margin-bottom: 6px;">
+                                        <span class="font-mono">{{ t.host }}:{{ t.port }}</span>
+                                        <span>{{ t.status }}</span>
+                                        {% if t.data %}
+                                        <span style="opacity: 0.85;">(open={{ t.data.port_open }})</span>
+                                        {% endif %}
+                                        {% if t.error %}<div style="color: var(--warning); font-size: 0.9em;">{{ t.error }}</div>{% endif %}
+                                    </div>
+                                    {% else %}
+                                    <span style="opacity: 0.7;">-</span>
+                                    {% endfor %}
+                                </td>
+                                <td style="padding: 6px 8px;">
+                                    {% for tr in row.trace|default([]) %}
+                                    <div style="margin-bottom: 6px;">
+                                        <span class="font-mono">{{ tr.host }}</span> {{ tr.status }}
+                                        {% if tr.data and tr.data.summary %}
+                                        <div style="margin-top: 2px; opacity: 0.9;">
+                                            hops={{ tr.data.summary.total_hops }} reached={{ tr.data.summary.target_reached }}
+                                        </div>
+                                        {% endif %}
+                                        {% if tr.error %}<div style="color: var(--warning); font-size: 0.9em;">{{ tr.error }}</div>{% endif %}
+                                        {% if tr.data and tr.data.hops and tr.data.hops|length > 0 %}
+                                        <details style="margin-top: 4px;">
+                                            <summary style="cursor: pointer;">跳明细</summary>
+                                            <pre style="max-height: 180px; overflow: auto; font-size: 0.8em;">{{ tr.data.hops | tojson(indent=2) }}</pre>
+                                        </details>
+                                        {% endif %}
+                                    </div>
+                                    {% else %}
+                                    <span style="opacity: 0.7;">-</span>
+                                    {% endfor %}
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </details>
+                {% endif %}
+                {% set rawmap = tp.data.get('raw_outputs', {}) %}
+                {% set biz_ips = tp.data.get('biz_target_ips', []) %}
+                {% set ns = namespace(conn_lines=[], conn_samples=[]) %}
+                {% for k, v in rawmap.items() %}
+                    {% if k.startswith('diagnose:nf_conntrack grep ') %}
+                        {% for line in v.split('\n') %}
+                            {% if line.strip() %}
+                                {% set _ = ns.conn_lines.append(line.strip()) %}
+                                {% if ns.conn_samples|length < 8 %}
+                                    {% set _ = ns.conn_samples.append(line.strip()) %}
+                                {% endif %}
+                            {% endif %}
+                        {% endfor %}
+                    {% endif %}
+                {% endfor %}
+                {% if biz_ips or ns.conn_lines|length > 0 %}
+                <details style="margin-top: 8px;">
+                    <summary style="cursor: pointer;">会话表证据（nf_conntrack）</summary>
+                    <div style="margin-top: 8px; font-size: 0.9em;">
+                        <p style="margin: 4px 0;"><strong>目标IP:</strong>
+                            {% if biz_ips %}<span class="font-mono">{{ biz_ips | join(', ') }}</span>{% else %}-{% endif %}
+                        </p>
+                        <p style="margin: 4px 0;"><strong>命中条数:</strong> {{ ns.conn_lines|length }}</p>
+                        {% if ns.conn_lines|length == 0 %}
+                        <p style="margin: 4px 0; color: var(--warning);">采样窗口内未见目标IP相关会话（不等于绝对无流量）。</p>
+                        {% endif %}
+                        {% if ns.conn_samples %}
+                        <div style="margin-top: 6px;"><strong>样例条目:</strong></div>
+                        <pre style="margin-top: 6px; max-height: 220px; overflow: auto; font-size: 0.82em;">{% for line in ns.conn_samples %}{{ line }}
+{% endfor %}</pre>
+                        {% endif %}
+                    </div>
+                </details>
+                {% endif %}
+                {% if rawmap %}
+                <details style="margin-top: 8px;">
+                    <summary style="cursor: pointer;">原始命令输出</summary>
+                    <pre style="margin-top: 8px; max-height: 320px; overflow: auto; font-size: 0.85em;">{% for k, v in rawmap.items() %}===== {{ k }} =====
+{{ v }}
+
+{% endfor %}</pre>
+                </details>
+                {% endif %}
+                {% endif %}
+            </div>
+        </div>
+        {% endif %}
+
+
+        {% if not (topology.hints or (topology.overlay_policy_flow is defined and topology.overlay_policy_flow) or topology.get('joint_path_evidence') or topology.get('pc_snapshot') or (topology.pc_snapshot_included is defined) or ("targeted_probe" in topology and topology["targeted_probe"])) %}
+        <p class="text-secondary" style="margin-top:8px;">本节无附加明细（仅拓扑示意）。</p>
+        {% endif %}
+    </div>
+</div>
+
+{% if _joint_ux %}<div class="joint-ux-order-5">{% endif %}
+{% include "partials/report_product_header.html" %}
+{% if _joint_ux %}</div>{% endif %}
+
+{% if _joint_ux %}</div>{% endif %}
+
+<!-- 修复建议 , 暂不添加 -->
+
+
+<!-- 页脚 -->
+<div style="text-align: center; color: var(--text-muted); font-size: 0.85em; margin-top: 40px; padding: 25px; border-top: 1px solid var(--border-color);">
+    <p>SD-WAN 桌面诊断专家 v1.0.0 | 报告生成于 {{ generated_at }}</p>
+    <p style="margin-top: 8px; font-size: 0.9em;">© 2026 SD-WAN Diagnostic Platform</p>
+</div>
+{% endblock %}
+
+{% block extra_css %}
+<style>
+    /* 拓扑图（无外部依赖） */
+    .topology-flow {
+        display: flex;
+        align-items: flex-start;
+        justify-content: center;
+        flex-wrap: wrap;
+        gap: 10px;
+    }
+
+    /* 主链在板块内均匀铺开（单行 + space-evenly；极宽时再横向滚动） */
+    .topology-strip-wrap {
+        width: 100%;
+        overflow-x: auto;
+        overflow-y: visible;
+        -webkit-overflow-scrolling: touch;
+        padding: 16px 12px 20px;
+    }
+    .topology-strip-wrap .topology-flow {
+        display: flex;
+        flex-wrap: nowrap;
+        justify-content: space-evenly;
+        align-items: stretch;
+        width: 100%;
+        min-width: min(100%, 680px);
+        gap: clamp(10px, 2vw, 32px);
+    }
+    /* 参考页 sdwan_overlay_topology_cartoon_temp：舞台、分层标题、换行主链、连接符 */
+    .topology-strip-wrap.topology-ref-stage {
+        --ref-ink: #1e293b;
+        --ref-muted: #64748b;
+        --ref-purple: #7c3aed;
+        --ref-purple-soft: #ede9fe;
+        --ref-pink-soft: #fce7f3;
+        --ref-shadow: 0 8px 24px rgba(30, 41, 59, 0.08);
+        margin-top: 12px;
+        padding: 26px 20px 30px !important;
+        border-radius: 24px;
+        background: linear-gradient(165deg, rgba(224, 242, 254, 0.5) 0%, #ffffff 44%, rgba(254, 243, 199, 0.38) 100%);
+        box-shadow: var(--ref-shadow);
+    }
+    .topology-ref-layer-title {
+        font-size: 0.75rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+        color: var(--ref-muted);
+        margin: 0 0 14px;
+        padding-left: 4px;
+    }
+    .topology-ref-layer-title--overlay {
+        color: var(--ref-purple);
+        margin-top: 0;
+        margin-bottom: 12px;
+    }
+    .topology-strip-wrap.topology-ref-stage .topology-flow {
+        flex-wrap: wrap !important;
+        justify-content: center !important;
+        align-items: flex-start !important;
+        gap: 12px 20px !important;
+        min-width: 0 !important;
+        width: 100%;
+    }
+    .topology-ref-node-wrap {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 10px;
+        flex: 0 1 auto;
+        max-width: 220px;
+    }
+    .topology-ref-connector {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 36px;
+        align-self: flex-start;
+        margin-top: calc(clamp(84px, 18vw, 112px) * 0.38);
+        font-size: 1.5rem;
+        color: var(--ref-muted, #64748b);
+        user-select: none;
+        line-height: 1;
+        flex-shrink: 0;
+    }
+    .topology-ref-connector--problem {
+        position: relative;
+        min-width: 2rem;
+        color: var(--ref-muted, #64748b);
+    }
+    .topology-ref-link-line {
+        display: block;
+        font-size: 1.5rem;
+        font-weight: 500;
+        line-height: 1;
+        color: #94a3b8;
+        text-decoration: line-through;
+        text-decoration-color: rgba(220, 38, 38, 0.45);
+        text-decoration-thickness: 2px;
+    }
+    .topology-ref-link-x {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        transform: translate(-50%, -52%);
+        font-size: 1.05rem;
+        font-weight: 800;
+        color: #c62828;
+        line-height: 1;
+        pointer-events: none;
+        text-shadow: 0 0 2px #fff, 0 0 4px #fff;
+    }
+    .topology-ref-ips--overlay {
+        background: rgba(255, 255, 255, 0.72);
+    }
+    .topology-ref-underlay-hint {
+        font-size: 0.7rem;
+        color: var(--ref-muted, #64748b);
+        text-align: center;
+        margin: 10px 0 0;
+        line-height: 1.45;
+    }
+    .topology-ref-meta {
+        text-align: center;
+        width: 100%;
+        max-width: 200px;
+        padding: 0 4px;
+    }
+    .topology-ref-role {
+        font-weight: 800;
+        font-size: 0.95rem;
+        line-height: 1.25;
+        color: var(--ref-ink, #1e293b);
+    }
+    .topology-ref-sub {
+        margin-top: 4px;
+        font-size: 0.75rem;
+        color: var(--ref-muted, #64748b);
+    }
+    .topology-ref-ips {
+        margin-top: 6px;
+        font-size: 0.72rem;
+        color: var(--ref-muted, #64748b);
+        line-height: 1.45;
+        font-family: ui-monospace, "Cascadia Code", Consolas, "Courier New", monospace;
+        background: #f1f5f9;
+        padding: 8px 10px;
+        border-radius: 12px;
+        text-align: left;
+    }
+    .topology-ref-ips strong {
+        color: var(--ref-ink, #1e293b);
+        font-weight: 600;
+    }
+    .topology-ref-ips-muted {
+        color: #94a3b8;
+    }
+    .topology-ref-overlay-band {
+        margin-top: 14px;
+        padding: 14px 12px 16px;
+        border-radius: 12px;
+        background: rgba(248, 250, 252, 0.92);
+        border: 1px solid #e2e8f0;
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+    }
+    .topology-ref-overlay-band .topology-ref-layer-title--overlay {
+        color: #5b21b6;
+        letter-spacing: 0.02em;
+    }
+    .topology-ref-overlay-band .topology-placeholder {
+        margin-top: 4px;
+        background: rgba(255, 255, 255, 0.65);
+    }
+    .topology-ref-overlay-arc {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex: 0 0 auto;
+        align-self: center;
+    }
+    .topology-ref-tunnel-path {
+        fill: none;
+        stroke: var(--ref-purple, #7c3aed);
+        opacity: 0.9;
+    }
+    .topology-ref-tunnel-cap {
+        fill: var(--ref-purple, #7c3aed);
+        font-size: 11px;
+        font-weight: 700;
+    }
+    .topology-ref-overlay-arc--problem .topology-ref-tunnel-path {
+        stroke: #b45309;
+        opacity: 0.85;
+    }
+    .topology-ref-overlay-arc--problem .topology-ref-tunnel-cap {
+        fill: #b45309;
+    }
+    .topology-ref-overlay-x {
+        fill: #94a3b8;
+        font-size: 17px;
+        font-weight: 800;
+        font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+    .topology-ref-overlay-arc--problem .topology-ref-overlay-x {
+        fill: #b45309;
+    }
+    .topology-strip-wrap.topology-ref-stage .topology-ref-bubble {
+        position: relative;
+        width: clamp(84px, 18vw, 112px);
+        height: clamp(84px, 18vw, 112px);
+        border-radius: 50%;
+        border: 4px solid #fff;
+        box-shadow: 0 4px 0 rgba(0, 0, 0, 0.06), var(--ref-shadow, 0 8px 24px rgba(30, 41, 59, 0.08));
+    }
+    .topology-strip-wrap.topology-ref-stage .topology-ref-bubble::after {
+        content: "";
+        position: absolute;
+        bottom: -10px;
+        left: 50%;
+        transform: translateX(-50%);
+        width: 0;
+        height: 0;
+        border-left: 10px solid transparent;
+        border-right: 10px solid transparent;
+        border-top: 12px solid #fff;
+        filter: drop-shadow(0 2px 0 rgba(0, 0, 0, 0.04));
+        pointer-events: none;
+    }
+    .topology-strip-wrap.topology-ref-stage .topology-ref-bubble svg {
+        width: min(64px, 58%);
+        height: min(64px, 58%);
+        filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.15));
+    }
+    .topology-strip-wrap .topology-node {
+        flex: 1 1 0;
+        min-width: 140px;
+        max-width: 280px;
+        padding: 10px 12px;
+    }
+    .topology-strip-wrap .topology-node-compact {
+        flex: 1.05 1 0;
+        min-width: 150px;
+        max-width: 280px;
+    }
+    .topology-strip-wrap .topology-node-endpoint {
+        min-width: 130px;
+        max-width: 240px;
+    }
+    .topology-strip-wrap .topology-node-name {
+        font-size: 0.9em;
+        line-height: 1.25;
+    }
+    .topology-strip-wrap .topology-node-id {
+        font-size: 0.75em;
+        margin-top: 4px;
+    }
+    .topology-strip-wrap .topology-io-columns {
+        margin-top: 6px;
+        gap: 8px;
+    }
+    .topology-strip-wrap .topology-io-col-right {
+        padding-left: 10px;
+    }
+    .topology-strip-wrap .topology-io-title {
+        font-size: 0.74em;
+    }
+    .topology-strip-wrap .topology-io-line {
+        font-size: 0.72em;
+    }
+    .topology-strip-wrap .topology-io-muted {
+        font-size: 0.72em;
+    }
+    .topology-strip-wrap .topology-endpoint-lines {
+        margin-top: 6px;
+        gap: 2px;
+    }
+    .topology-strip-wrap .topology-tunnel-lines {
+        margin-top: 8px;
+        gap: 5px;
+    }
+    .topology-strip-wrap .topology-tunnel-row {
+        font-size: 0.78em;
+        flex-wrap: wrap;
+    }
+    .topology-strip-wrap .topology-tunnel-label {
+        min-width: 52px;
+    }
+    .topology-strip-wrap .topology-hop {
+        flex: 0 0 auto;
+        min-width: 40px;
+        max-width: 64px;
+    }
+    .topology-strip-wrap .topology-arrow {
+        font-size: 1.35em;
+    }
+    .topology-strip-wrap .topology-hop-tag {
+        font-size: 0.7em;
+    }
+
+    .topology-strip-wrap .topology-cartoon-node {
+        flex: 1 1 0;
+        min-width: 140px;
+        max-width: 280px;
+        padding: 6px 8px;
+    }
+    .topology-strip-wrap .topology-cartoon-overlay-pe {
+        flex: 1.05 1 0;
+        min-width: 150px;
+        max-width: 280px;
+    }
+    .topology-strip-wrap .topology-cartoon-endpoint {
+        min-width: 130px;
+        max-width: 240px;
+    }
+
+    .topology-row-label {
+        font-size: 0.82em;
+        font-weight: 700;
+        color: var(--text-secondary);
+        letter-spacing: 0.02em;
+        margin-bottom: 6px;
+    }
+
+    .topology-flow-overlay {
+        margin-top: 2px;
+    }
+
+    .topology-node-compact {
+        min-width: 150px;
+    }
+
+    .topology-node {
+        min-width: 200px;
+        max-width: 320px;
+        padding: 12px 14px;
+        border: 2px solid #667eea;
+        border-radius: 10px;
+        background: #fff;
+        box-shadow: var(--shadow-sm);
+        text-align: left;
+    }
+    .topology-node-problem {
+        border-color: #d32f2f;
+        box-shadow: 0 0 0 2px rgba(211, 47, 47, 0.18);
+        background: #fff8f8;
+    }
+
+    .topology-node-head {
+        text-align: center;
+        margin-bottom: 4px;
+    }
+
+    .topology-node-name {
+        font-weight: 700;
+        color: var(--text-primary);
+        font-size: 0.96em;
+    }
+
+    .topology-node-id {
+        margin-top: 6px;
+        color: var(--text-muted);
+        font-size: 0.78em;
+        font-family: var(--font-mono);
+    }
+
+    .topology-io-columns {
+        display: flex;
+        gap: 10px;
+        margin-top: 10px;
+        align-items: flex-start;
+    }
+
+    .topology-io-col {
+        flex: 1;
+        min-width: 0;
+        text-align: left;
+    }
+
+    .topology-io-col-right {
+        padding-left: 10px;
+        border-left: 1px dashed var(--border-color, #dfe3ec);
+    }
+
+    .topology-io-title {
+        margin-top: 0;
+        font-size: 0.78em;
+        color: var(--text-secondary);
+        font-weight: 600;
+    }
+
+    .topology-io-line {
+        margin-top: 2px;
+        font-size: 0.76em;
+        color: var(--text-secondary);
+        font-family: var(--font-mono);
+        word-break: break-all;
+    }
+
+    .topology-io-muted {
+        font-size: 0.76em;
+        color: var(--text-muted);
+        margin-top: 2px;
+    }
+
+    .topology-tunnel-lines {
+        margin-top: 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+    }
+
+    .topology-endpoint-lines {
+        margin-top: 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        align-items: center;
+        text-align: center;
+    }
+
+    .topology-node-endpoint {
+        min-width: 170px;
+        max-width: 240px;
+    }
+
+    .topology-tunnel-row {
+        font-size: 0.78em;
+        color: var(--text-secondary);
+        display: flex;
+        align-items: baseline;
+        gap: 6px;
+        flex-wrap: wrap;
+    }
+
+    .topology-tunnel-label {
+        font-weight: 600;
+        color: var(--text-secondary);
+        min-width: 56px;
+    }
+
+    .topology-hop {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: flex-start;
+        gap: 2px;
+        min-width: 56px;
+        max-width: 280px;
+    }
+
+    .topology-hop-hint {
+        font-size: 0.7em;
+        line-height: 1.38;
+        color: var(--text-secondary);
+        text-align: center;
+        max-width: 268px;
+    }
+
+    .topology-placeholder {
+        margin-top: 6px;
+        padding: 12px 16px;
+        font-size: 0.85em;
+        color: var(--text-secondary);
+        background: rgba(102, 126, 234, 0.06);
+        border-radius: var(--radius-md, 8px);
+        border: 1px dashed var(--border-color, #dfe3ec);
+    }
+
+    .topology-arrow {
+        font-size: 1.55em;
+        color: #667eea;
+        font-weight: 700;
+        line-height: 1;
+    }
+
+    .topology-hop-direct .topology-arrow {
+        color: #2e7d32;
+    }
+
+    .topology-hop-indirect-glyph {
+        display: flex;
+        align-items: center;
+        gap: 2px;
+        color: #b8860b;
+    }
+    .topology-hop-problem .topology-hop-tag,
+    .topology-hop-problem .topology-hop-bridge,
+    .topology-hop-problem .topology-arrow {
+        color: #c62828 !important;
+    }
+    .topology-hop-problem .topology-hop-dash {
+        border-top-color: #c62828;
+    }
+    .table-row-problem td {
+        background: #fff6f6;
+    }
+
+    .topology-hop-dash {
+        display: inline-block;
+        width: 14px;
+        border-top: 2px dashed #c4a000;
+        opacity: 0.85;
+    }
+
+    .topology-hop-bridge {
+        font-size: 1.05em;
+        line-height: 1;
+        color: #a67c00;
+        padding: 0 1px;
+    }
+
+    .topology-hop-tag {
+        font-size: 0.68em;
+        color: var(--text-muted);
+        font-weight: 600;
+        letter-spacing: 0.02em;
+    }
+
+    .topology-tunnel-subrow {
+        margin-top: 2px;
+        padding-left: 2px;
+    }
+
+    .topology-overlay-note {
+        margin-top: 10px;
+        padding: 8px 12px;
+        font-size: 0.78em;
+        line-height: 1.45;
+        color: var(--text-secondary);
+        background: rgba(102, 126, 234, 0.06);
+        border-radius: 8px;
+        border-left: 3px solid #667eea;
+    }
+    .topology-overlay-problem {
+        margin-top: 10px;
+        padding: 8px 12px;
+        font-size: 0.82em;
+        line-height: 1.45;
+        color: #b71c1c;
+        background: #fff1f1;
+        border-radius: 8px;
+        border-left: 3px solid #d32f2f;
+        font-weight: 600;
+    }
+
+    /* 卡通拓扑：无方框卡片，仅气泡 + 下方信息 */
+    .topology-cartoon-node {
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
+        min-width: 160px;
+        max-width: 300px;
+        padding: 6px 8px;
+        border: none;
+        background: transparent;
+        box-shadow: none;
+        text-align: center;
+        border-radius: 0;
+        overflow: visible;
+    }
+    .topology-cartoon-overlay-pe {
+        min-width: 150px;
+        max-width: 300px;
+    }
+    .topology-cartoon-node.topology-cartoon-problem {
+        border: none;
+        border-radius: 0;
+        background: transparent;
+        box-shadow: none;
+        padding: 0;
+    }
+    .topology-strip-wrap.topology-ref-stage .topology-cartoon-problem .topology-ref-bubble,
+    .topology-cartoon-problem .topology-cartoon-bubble {
+        border-color: #ffcdd2;
+        box-shadow: 0 0 0 3px #c62828, 0 4px 0 rgba(198, 40, 40, 0.12), 0 6px 16px rgba(198, 40, 40, 0.18);
+    }
+    .topology-strip-wrap.topology-ref-stage .topology-cartoon-problem .topology-ref-bubble::after {
+        border-top-color: #ffcdd2;
+        filter: drop-shadow(0 1px 0 rgba(198, 40, 40, 0.15));
+    }
+    .topology-cartoon-problem .topology-ref-role {
+        color: #b71c1c;
+    }
+    .topology-cartoon-problem .topology-ref-sub {
+        color: #c62828;
+        opacity: 0.85;
+    }
+    .topology-cartoon-problem .topology-ref-ips {
+        border: 1px solid #ef9a9a;
+        background: #fff5f5;
+        box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.6);
+    }
+    .topology-cartoon-problem .topology-ref-ips strong {
+        color: #b71c1c;
+    }
+    .topology-cartoon-bubble-internet {
+        background: linear-gradient(145deg, #a5f3fc, #06b6d4);
+    }
+    .topology-cartoon-stack {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        width: 100%;
+        gap: 10px;
+        width: 100%;
+    }
+    .topology-cartoon-bubble {
+        flex-shrink: 0;
+        width: 72px;
+        height: 72px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border: 3px solid #fff;
+        box-shadow: 0 4px 12px rgba(30, 41, 59, 0.12), 0 2px 0 rgba(0, 0, 0, 0.04);
+    }
+    .topology-cartoon-bubble svg {
+        display: block;
+    }
+    .topology-cartoon-bubble-pc {
+        background: linear-gradient(145deg, #93c5fd, #3b82f6);
+    }
+    .topology-cartoon-bubble-cpe {
+        background: linear-gradient(145deg, #fcd34d, #f59e0b);
+    }
+    .topology-cartoon-bubble-gateway {
+        background: linear-gradient(145deg, #5eead4, #0d9488);
+    }
+    .topology-cartoon-bubble-hub {
+        background: linear-gradient(145deg, #c4b5fd, #7c3aed);
+    }
+    .topology-cartoon-bubble-unknown {
+        background: linear-gradient(145deg, #cbd5e1, #64748b);
+    }
+
+    /* 业务联合报告（business-diagnose → deep_dive）：首屏结论 + 区块重排 + 降噪 */
+    .meta-info--joint {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    @media (min-width: 720px) {
+        .meta-info--joint {
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+        }
+    }
+    @media (min-width: 1100px) {
+        .meta-info--joint {
+            grid-template-columns: repeat(6, minmax(0, 1fr));
+        }
+    }
+    .meta-info--joint .meta-item {
+        min-height: 100%;
+    }
+
+    .report-joint-hero {
+        margin: 10px 0 18px;
+        padding: 14px 16px 16px;
+        border-radius: 14px;
+        background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+        border: 1px solid #e2e8f0;
+        border-left: 6px solid #64748b;
+        box-shadow: 0 4px 14px rgba(15, 23, 42, 0.06);
+    }
+    .report-joint-hero--critical { border-left-color: #b71c1c; background: linear-gradient(135deg, #fff5f5 0%, #fef2f2 100%); }
+    .report-joint-hero--error { border-left-color: #d32f2f; }
+    .report-joint-hero--warning { border-left-color: #f9a825; }
+    .report-joint-hero--success { border-left-color: #2e7d32; background: linear-gradient(135deg, #f1f8f4 0%, #ecfdf5 100%); }
+    .report-joint-hero--info { border-left-color: #2563eb; }
+    .report-joint-hero-bar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+    }
+    .report-joint-probe-dl {
+        margin: 12px 0 0;
+        padding: 0;
+    }
+    .report-joint-probe-row {
+        display: grid;
+        grid-template-columns: minmax(7.5em, 9.5em) 1fr;
+        gap: 8px 14px;
+        margin: 0 0 10px;
+        align-items: start;
+    }
+    .report-joint-probe-row dt {
+        margin: 0;
+        font-size: 0.82rem;
+        font-weight: 700;
+        color: #64748b;
+        line-height: 1.45;
+    }
+    .report-joint-probe-row dd {
+        margin: 0;
+        font-size: 0.92rem;
+        line-height: 1.5;
+        color: #1e293b;
+    }
+    .report-joint-probe-row--fault dt,
+    .report-joint-probe-row--fault dd {
+        color: #b91c1c;
+    }
+    .report-joint-probe-result {
+        font-weight: 700;
+    }
+    .report-joint-probe-result--fail { color: #b91c1c; }
+    .report-joint-probe-result--partial { color: #b45309; }
+    .report-joint-probe-result--ok { color: #15803d; }
+    .report-joint-probe-result--unknown { color: #64748b; }
+    .report-joint-probe-target-line {
+        margin-top: 6px;
+        font-size: 0.86rem;
+        color: #475569;
+        line-height: 1.45;
+    }
+    .topology-detail-card .card-header {
+        border-bottom: 1px solid #e2e8f0;
+    }
+    .report-joint-verdict {
+        font-weight: 800;
+        font-size: 1.02rem;
+        color: #0f172a;
+        line-height: 1.35;
+        flex: 1 1 220px;
+    }
+    .report-joint-one-liner {
+        margin: 10px 0 0;
+        font-size: 0.92rem;
+        line-height: 1.5;
+        color: #334155;
+    }
+    .report-joint-heuristic-note {
+        margin: 10px 0 0;
+        padding: 8px 10px;
+        font-size: 0.82rem;
+        line-height: 1.5;
+        color: #92400e;
+        background: #fffbeb;
+        border-radius: 8px;
+        border: 1px solid #fde68a;
+    }
+    .report-joint-meta-row {
+        margin-top: 10px;
+        font-size: 0.82rem;
+        color: #64748b;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 14px 20px;
+    }
+    .report-joint-cause-list {
+        margin: 12px 0 0;
+        padding-left: 1.15em;
+        font-size: 0.88rem;
+        line-height: 1.45;
+        color: #334155;
+    }
+    .report-joint-cause-list li { margin: 4px 0; }
+    .report-joint-cause-list .severity-badge { font-size: 0.65rem; margin-right: 6px; vertical-align: middle; }
+    .report-joint-more { list-style: none; margin-left: -1em; color: #64748b; font-size: 0.82rem; }
+    .report-joint-problem-strip, .report-joint-stage {
+        margin-top: 10px;
+        padding: 8px 10px;
+        font-size: 0.82rem;
+        line-height: 1.45;
+        color: #92400e;
+        background: #fffbeb;
+        border-radius: 8px;
+        border: 1px solid #fde68a;
+    }
+    .report-joint-stage { color: #7f1d1d; background: #fef2f2; border-color: #fecaca; }
+    .report-joint-anchors {
+        margin-top: 12px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px 14px;
+        font-size: 0.82rem;
+    }
+    .report-joint-a {
+        color: #2563eb;
+        font-weight: 600;
+        text-decoration: none;
+        border-bottom: 1px solid transparent;
+    }
+    .report-joint-a:hover { border-bottom-color: #2563eb; }
+
+    .joint-ux-reorder {
+        display: flex;
+        flex-direction: column;
+    }
+    .joint-ux-reorder .joint-ux-order-1 { order: 1; }
+    .joint-ux-reorder .joint-ux-order-2 { order: 2; }
+    .joint-ux-reorder .joint-ux-order-3 { order: 3; }
+    .joint-ux-reorder .joint-ux-order-4 { order: 4; }
+    .joint-ux-reorder .joint-ux-order-5 { order: 5; }
+
+    /* 各板块 section 标题统一字号（不再因 joint-ux-section-compact 缩小） */
+    .section-header h2 {
+        font-size: 1.15rem;
+        font-weight: 600;
+    }
+
+    .header .meta-value--prose {
+        font-family: var(--font-family);
+        font-size: 0.9375rem;
+        line-height: 1.45;
+        word-break: break-word;
+    }
+    .header .meta-value--mono {
+        font-family: var(--font-mono);
+        font-size: 0.9rem;
+        word-break: break-all;
+    }
+
+    .joint-ux-root-highlight .card {
+        padding: 12px 14px !important;
+    }
+    .joint-ux-root-highlight .card-description {
+        font-size: 0.9rem;
+        line-height: 1.45;
+    }
+    .joint-ux-root-highlight .card-meta {
+        font-size: 0.82rem;
+    }
+    .joint-ux-root-highlight {
+        box-shadow: inset 4px 0 0 rgba(102, 126, 234, 0.9);
+        border-radius: 0 8px 8px 0;
+    }
+
+    /* 页眉副标题（联合场景）：与紫底对比可读 */
+    .header .report-header-subline {
+        margin: 6px 0 0;
+        font-size: 0.875rem;
+        line-height: 1.5;
+        color: rgba(255, 255, 255, 0.9);
+        max-width: 52rem;
+        font-weight: 400;
+    }
+
+    /* 交付摘要：与 hero 共用字号阶梯 */
+    .delivery-info-box { margin-bottom: 14px; }
+    .delivery-headline {
+        margin: 6px 0 0;
+        line-height: 1.55;
+        font-size: 0.9375rem;
+        color: var(--text-primary);
+    }
+    .delivery-subline {
+        margin: 10px 0 0;
+        font-size: 0.8125rem;
+        line-height: 1.5;
+        color: var(--text-secondary);
+    }
+
+    /* 联合结论区：主叙述 / 主因 / 已排除 / 待核对 / 折叠技术明细 */
+    .report-joint-probe-dl--lead .report-joint-probe-row dd {
+        font-size: 0.9375rem;
+    }
+    .report-joint-narrative {
+        margin: 8px 0 10px;
+        padding: 8px 10px;
+        font-size: 0.8125rem;
+        line-height: 1.6;
+        color: var(--text-secondary);
+        background: rgba(255, 255, 255, 0.45);
+        border-left: 2px solid rgba(102, 126, 234, 0.45);
+        border-radius: 6px;
+    }
+    .report-joint-primary-fault {
+        font-size: 1.0625rem;
+        font-weight: 700;
+        color: #b91c1c;
+    }
+    .report-joint-primary-fault-muted {
+        font-size: 0.9375rem;
+        font-weight: 500;
+        color: var(--text-secondary);
+    }
+    .report-joint-hero--success .report-joint-primary-fault,
+    .report-joint-hero--info .report-joint-primary-fault {
+        color: #166534;
+    }
+    .report-joint-ruled-out {
+        margin: 0;
+        padding-left: 18px;
+        line-height: 1.55;
+        font-size: 0.875rem;
+    }
+    .report-joint-ruled-out li {
+        color: #475569;
+    }
+    .report-joint-secondary-details {
+        margin-top: 8px;
+        border: 1px dashed #e2e8f0;
+        border-radius: 6px;
+        padding: 2px 10px 8px;
+        background: rgba(255, 251, 235, 0.35);
+    }
+    .report-joint-secondary-summary {
+        cursor: pointer;
+        font-size: 0.8125rem;
+        font-weight: 500;
+        color: #92400e;
+        padding: 6px 0;
+        list-style-position: outside;
+    }
+    .report-joint-secondary-details[open] .report-joint-secondary-summary {
+        font-weight: 600;
+        color: #78350f;
+    }
+    .report-joint-secondary {
+        margin: 0 0 4px;
+        padding: 6px 8px 8px;
+        background: transparent;
+        border: none;
+        color: #78350f;
+        font-size: 0.8125rem;
+        line-height: 1.5;
+    }
+    .report-joint-secondary ul {
+        margin: 0;
+        padding-left: 18px;
+    }
+    .report-joint-secondary li {
+        margin-bottom: 6px;
+    }
+    .report-joint-secondary-label {
+        color: #92400e;
+    }
+    .report-joint-secondary-note {
+        margin-top: 2px;
+        color: #57534e;
+        font-size: 0.78rem;
+    }
+    .report-joint-tech-details {
+        margin-top: 10px;
+        background: rgba(255, 255, 255, 0.55);
+        border: 1px dashed #cbd5e1;
+        border-radius: 6px;
+        padding: 6px 12px;
+    }
+    .report-joint-tech-details > summary {
+        cursor: pointer;
+        font-size: 0.8125rem;
+        color: #475569;
+        padding: 4px 0;
+    }
+    .report-joint-tech-details[open] > summary {
+        font-weight: 600;
+        color: #1f2933;
+    }
+    .report-joint-probe-dl--tech {
+        margin-top: 4px;
+    }
+</style>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    // 预留：如后续恢复 Mermaid，可在此注入初始化逻辑。
+</script>
+{% endblock %}

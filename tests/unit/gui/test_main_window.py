@@ -1,4 +1,5 @@
 import pytest
+from sdwan_desktop.interface.gui.app_branding import GUI_DISPLAY_NAME
 from sdwan_desktop.interface.gui.main_window import MainWindow
 
 
@@ -6,22 +7,23 @@ def test_main_window_creation(qapp):
     """测试主窗口是否可以正常实例化"""
     window = MainWindow()
     assert window is not None
-    assert window.windowTitle() == "SD-WAN桌面诊断专家"
+    assert window.windowTitle() == GUI_DISPLAY_NAME
     assert window.minimumWidth() == 1000
     assert window.minimumHeight() == 700
 
 
 def test_tabs_exist(qapp):
-    """测试 5 个标签页是否已创建"""
+    """测试功能标签页是否已创建"""
     window = MainWindow()
     tab_widget = window.tab_widget
-    
-    assert tab_widget.count() == 5
+
+    assert tab_widget.count() == 6
     assert tab_widget.tabText(0) == "网络工具"
     assert tab_widget.tabText(1) == "一键体检"
-    assert tab_widget.tabText(2) == "深度诊断"
-    assert tab_widget.tabText(3) == "业务监测"
-    assert tab_widget.tabText(4) == "报告预览"
+    assert tab_widget.tabText(2) == "业务路径诊断"
+    assert tab_widget.tabText(3) == "深度诊断"
+    assert tab_widget.tabText(4) == "业务监测"
+    assert tab_widget.tabText(5) == "报告预览"
 
 
 def test_status_bar_ready(qapp):
@@ -65,7 +67,7 @@ def test_quick_check_tab_integration(qapp):
     
     # 检查基本组件是否存在
     assert quick_check_tab.start_btn is not None
-    assert quick_check_tab.save_btn is not None
+    assert quick_check_tab.preview_btn is not None
     assert quick_check_tab.result_table is not None
 
 

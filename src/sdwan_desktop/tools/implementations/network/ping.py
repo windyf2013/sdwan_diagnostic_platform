@@ -178,10 +178,12 @@ class PingTool:
             ]
         
         # 执行命令
-        process = await asyncio.create_subprocess_exec(
+        from sdwan_desktop.core.subprocess_platform import create_subprocess_exec_hidden
+
+        process = await create_subprocess_exec_hidden(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            stderr=asyncio.subprocess.PIPE,
         )
         
         try:

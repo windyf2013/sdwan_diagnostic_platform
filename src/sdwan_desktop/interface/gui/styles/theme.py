@@ -42,10 +42,20 @@ class ThemeManager:
         QPushButton:disabled {
             background-color: #a0cfff;
         }
-        QLineEdit, QTextEdit {
+        QLineEdit, QTextEdit, QComboBox {
             border: 1px solid #dcdfe6;
             border-radius: 4px;
             padding: 4px;
+            background-color: white;
+            color: #2c3e50;
+        }
+        QComboBox::drop-down {
+            border: none;
+            width: 24px;
+        }
+        QComboBox:disabled {
+            background-color: #f5f7fa;
+            color: #909399;
         }
         QProgressBar {
             border: 1px solid #dcdfe6;
@@ -99,12 +109,20 @@ class ThemeManager:
         QPushButton:disabled {
             background-color: #3e3e3e;
         }
-        QLineEdit, QTextEdit {
+        QLineEdit, QTextEdit, QComboBox {
             border: 1px solid #3e3e3e;
             border-radius: 4px;
             padding: 4px;
             background-color: #3c3c3c;
             color: #d4d4d4;
+        }
+        QComboBox::drop-down {
+            border: none;
+            width: 24px;
+        }
+        QComboBox:disabled {
+            background-color: #2d2d2d;
+            color: #808080;
         }
         QProgressBar {
             border: 1px solid #3e3e3e;

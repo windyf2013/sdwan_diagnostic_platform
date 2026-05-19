@@ -1,0 +1,22 @@
+﻿# src path prefix -> pytest (DoD)
+paths:
+  "src/sdwan_desktop/flow/":
+    - tests/flow/
+  "src/sdwan_desktop/runtime/":
+    - tests/flow/
+  "src/sdwan_desktop/interface/gui/":
+    - tests/unit/gui/
+  "src/sdwan_desktop/interface/cli/":
+    - tests/unit/interface/
+  "src/sdwan_desktop/services/collector/":
+    - tests/unit/services/collector/
+  "src/sdwan_desktop/services/parser/":
+    - tests/unit/services/parser/
+  "src/sdwan_desktop/services/topology/":
+    - tests/unit/services/topology/
+  "src/sdwan_desktop/services/reporter/":
+    - tests/unit/services/reporter/
+  "src/sdwan_desktop/services/diagnosis/":
+    - tests/unit/services/diagnosis/
+  "src/sdwan_desktop/services/analyzer/":
+    - tests/unit/services/analyzer/

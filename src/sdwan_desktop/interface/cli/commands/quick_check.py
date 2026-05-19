@@ -28,7 +28,6 @@ from sdwan_desktop.interface.cli.formatters import (
     format_recommendations,
     colorize
 )
-from sdwan_desktop.core.types.diagnosis import DiagnosisResult, Severity
 from sdwan_desktop.services.connectivity import ProbeTarget, ProbeProtocol
 
 logger = logging.getLogger(__name__)
@@ -36,8 +35,16 @@ logger = logging.getLogger(__name__)
 
 # ==================== 主流程命令 ====================
 
-@click.command()
-@click.option('--output', '-o', default=None, help='报告输出路径 (默认: ./reports/quick_check_<timestamp>.html)')
+@click.command(
+    epilog=(
+        "成功判据: 流程完成并生成输出文件；严重度由规则引擎汇总。\n"
+        "不包含: CPE 配置解析、隧道 BFD、全量策略审计、单业务 SLA 证明。\n"
+        "升级: 特定业务 FQDN:端口 → agentctl business-diagnose；CPE 专检 → agentctl deep-dive。\n"
+        "退出码: 0 成功；1 运行时错误；2 未使用。\n"
+        "JSON（--format json）: 顶层含 diagnosis 与 report_pack，供 CI 门禁。"
+    ),
+)
+@click.option('--output', '-o', default=None, help='报告输出路径 (默认: ./reports/quick_check_<timestamp>.html；JSON 时为 .json)')
 @click.option('--format', '-f', 'fmt', default='html', type=click.Choice(['html', 'json']), help='输出格式 (默认: html)')
 @click.option('--verbose', '-v', is_flag=True, help='详细输出模式')
 @click.option('--no-parallel', is_flag=True, help='禁用并行执行')
@@ -67,7 +74,18 @@ def quick_check(output: Optional[str], fmt: str, verbose: bool, no_parallel: boo
     print("")
     
     ctx = FlowContext(trace_id=trace_id)
-    
+
+    from pydantic import ValidationError
+    from sdwan_desktop.core.types.quick_check_run_config import QuickCheckRunConfig
+
+    try:
+        cfg = QuickCheckRunConfig(output_format=str(fmt).lower(), report_output=output)
+    except ValidationError as exc:
+        print(f"参数无效: {exc}")
+        sys.exit(1)
+
+    ctx.set("output_format", cfg.output_format)
+
     # 初始化服务
     collector = WindowsCollector()
     connectivity_tester = ConnectivityTester()
@@ -83,553 +101,26 @@ def quick_check(output: Optional[str], fmt: str, verbose: bool, no_parallel: boo
     # 初始化报告生成器
     report_builder = HtmlReportBuilder()
     
-    # 定义步骤处理器映射
-    # 注意：这里的 handler 签名需要适配 FlowRuntime 的调用方式
-    # FlowRuntime 期望 handler(ctx=ctx, ...)
-    
-    async def step_collect(ctx: FlowContext):
-        print("📊 采集系统信息... ", end="", flush=True)
-        start = datetime.now()
-        snapshot = await collector.collect(ctx)
-        ctx.set("system_snapshot", snapshot)
-        duration = (datetime.now() - start).total_seconds()
-        print(f"✓ ({duration:.1f}s)")
-        
-        # 打印详细网卡状态，用于诊断摘要对比
-        if snapshot.adapters:
-            for i, adapter in enumerate(snapshot.adapters):
-                status_str = "已连接" if adapter.is_connected else "未连接"
-                ip_info = f"IP: {adapter.ip_addresses[0]}" if adapter.ip_addresses else "无IP"
-                gw_info = f", 网关: {adapter.default_gateway}" if adapter.default_gateway else ""
-                print(f"   - 网卡 {i+1}: {adapter.description or adapter.name} [{status_str}, {ip_info}{gw_info}]")
-        
-        # 显式打印 primary_adapter 的判断结果
-        primary = snapshot.primary_adapter
-        if primary:
-            print(f"   - [规则引擎视角] 主网卡: {primary.description or primary.name} [is_connected={primary.is_connected}, default_gateway={primary.default_gateway}]")
-        else:
-            print(f"   - [规则引擎视角] 主网卡: None")
-            
-        return snapshot
+    from sdwan_desktop.flow.handlers.quick_check_steps import (
+        QuickCheckHandlerDeps,
+        QuickCheckHandlersParams,
+        build_quick_check_step_handlers,
+    )
 
-    async def step_gateway(ctx: FlowContext):
-        print("🌐 测试网关连通性... ", end="", flush=True)
-        start = datetime.now()
-        snapshot = ctx.get("system_snapshot")
-        gateway_ip = snapshot.ip_config.default_gateway if snapshot and snapshot.ip_config else None
-        
-        # 如果 ip_config 中没有，尝试从 primary_adapter 获取
-        if not gateway_ip and snapshot and snapshot.primary_adapter:
-            gateway_ip = snapshot.primary_adapter.default_gateway
-            
-        if not gateway_ip:
-            print("✗ (未找到网关)")
-            return None
-            
-        result = await connectivity_tester.test_gateway(gateway_ip, ctx)
-        ctx.set("gateway_ping_result", result)
-        duration = (datetime.now() - start).total_seconds()
-        status = "可达" if result.success else "不可达"
-        rtt = result.metrics.rtt_avg if result.metrics and result.metrics.rtt_avg is not None else 0
-        print(f"✓ ({duration:.1f}s)")
-        print(f"   - 网关 {gateway_ip}: {status}, RTT={rtt:.1f}ms")
-        return result
-
-    async def step_dns(ctx: FlowContext):
-        print("🔬 测试DNS解析... ", end="", flush=True)
-        start = datetime.now()
-        snapshot = ctx.get("system_snapshot")
-        dns_servers = snapshot.ip_config.dns_servers if snapshot and snapshot.ip_config else ["114.114.114.114"]
-        
-        # 使用 ConnectivityTester 的通用探测方法，或者手动构造 DNS 探测
-        # 这里为了简化，我们直接调用 test_domestic_dns，但需要传入服务器列表
-        results = await connectivity_tester.test_domestic_dns(dns_servers, ctx)
-        ctx.set("dns_results", results)
-        duration = (datetime.now() - start).total_seconds()
-        print(f"✓ ({duration:.1f}s)")
-        for res in results:
-            status = "响应正常" if res.success else "超时/失败"
-            rtt_str = f", RTT={res.metrics.rtt_avg:.0f}ms" if res.success and res.metrics and res.metrics.rtt_avg is not None else ""
-            print(f"   - 国内DNS {res.target}: {status}{rtt_str}")
-        return results
-
-    async def step_internet(ctx: FlowContext):
-        print("🌐 测试互联网连通性（优化版）... ", end="", flush=True)
-        start = datetime.now()
-        
-        from sdwan_desktop.flow.definitions.quick_check import DEFAULT_TEST_DOMAINS, DOMAIN_TO_CATEGORY
-        
-        # ✅ 检查缓存命中情况
-        dns_cache_dict = ctx.get("dns_resolution_cache")
-        cache_hit_count = 0
-        if dns_cache_dict:
-            for domain in DEFAULT_TEST_DOMAINS:
-                if domain in dns_cache_dict:
-                    cache_hit_count += 1
-
-        result = await connectivity_tester.test_internet_optimized(
-            domains=DEFAULT_TEST_DOMAINS,
-            ctx=ctx,
-            use_cache=True
-        )
-        
-        ctx.set("internet_connectivity_result", result)
-        duration = (datetime.now() - start).total_seconds()
-        
-        # ✅ 清晰明确的串口输出
-        cache_info = f" [缓存命中: {cache_hit_count}/{len(DEFAULT_TEST_DOMAINS)}]" if cache_hit_count > 0 else ""
-        print(f"✓ ({duration:.1f}s){cache_info}")
-        
-        domestic_ok = sum(1 for t in result.domestic_target_results if t.success)
-        international_ok = sum(1 for t in result.international_target_results if t.success)
-        domestic_total = len(result.domestic_target_results)
-        international_total = len(result.international_target_results)
-        
-        print(f"   - 国内成功率: {domestic_ok}/{domestic_total} ({result.domestic_success_rate:.0%})")
-        print(f"   - 国际成功率: {international_ok}/{international_total} ({result.international_success_rate:.0%})")
-        
-        # ✅ 显示域名分类统计
-        category_stats = {}
-        for target_result in result.domestic_target_results + result.international_target_results:
-            domain = target_result.target.host
-            category = DOMAIN_TO_CATEGORY.get(domain, "unknown")
-            if category not in category_stats:
-                category_stats[category] = {"total": 0, "success": 0}
-            category_stats[category]["total"] += 1
-            if target_result.success:
-                category_stats[category]["success"] += 1
-        
-        if category_stats:
-            print(f"   ℹ️  域名分类统计:")
-            category_names = {
-                "domestic": "国内核心",
-                "video": "国际视频",
-                "international": "国际核心",  # 兼容旧版本
-                "enterprise": "企业办公",      # 兼容旧版本
-                "cloud": "云服务",            # 兼容旧版本
-                "ecommerce_live": "电商直播"   # 兼容旧版本
-            }
-            for category, stats in category_stats.items():
-                name = category_names.get(category, category)
-                print(f"      - {name}: {stats['success']}/{stats['total']}")
-
-        return result
-
-    async def step_dns_split(ctx: FlowContext):
-        # ✅ 检查连通性是否失败，失败则跳过
-        connectivity_failed = ctx.get("connectivity_failed", False)
-        if connectivity_failed:
-            print("⏭️  跳过DNS分流测试（连通性测试失败）")
-            from sdwan_desktop.services.dns_split import DnsSplitTestResult
-            result = DnsSplitTestResult(
-                total_domains=0,
-                errors=["连通性测试失败，跳过DNS分流测试"]
-            )
-            ctx.set("dns_split_result", result)
-            return result
-        
-        print("🔎 测试DNS解析差异（优化版）... ", end="", flush=True)
-        start = datetime.now()
-        
-        # ✅ 优化：使用统一域名集和优化的测试方法（支持结果缓存）
-        from sdwan_desktop.flow.definitions.quick_check import DEFAULT_TEST_DOMAINS, DOMAIN_TO_CATEGORY
-        
-        snapshot = ctx.get("system_snapshot")
-        system_dns_servers = snapshot.ip_config.dns_servers if snapshot and snapshot.ip_config else []
-        
-        # ✅ 按需求：仅使用系统默认DNS和8.8.8.8
-        domestic_dns = system_dns_servers[:1] if system_dns_servers else ["114.114.114.114"]
-        international_dns = ["8.8.8.8"]
-        
-        # ✅ 优化：使用精简域名集（4个核心域名）
-        test_domains = DEFAULT_TEST_DOMAINS
-        
-        # ✅ 检查缓存命中情况
-        dns_cache_dict = ctx.get("dns_resolution_cache")
-        cache_hit_count = 0
-        if dns_cache_dict:
-            for domain in test_domains:
-                if domain in dns_cache_dict:
-                    cache_hit_count += 1
-            
-        # ✅ 使用精简域名集和优化方法
-        try:
-            import asyncio
-            
-            # ✅ 内部超时保护：70秒（比 Flow 的 80 秒略短，确保能执行 except 块）
-            result = await asyncio.wait_for(
-                dns_split_tester.test_optimized(
-                    domains=test_domains,  # ✅ 使用统一的精简域名集（4个域名）
-                    domestic_dns=domestic_dns,  # ✅ 使用完整的国内DNS列表
-                    international_dns=international_dns,  # ✅ 使用完整的国际DNS列表
-                    ctx=ctx,
-                    use_cache=True  # ✅ 启用结果缓存复用
-                ),
-                timeout=70  # ✅ 双层保护：Flow层80秒 - 10秒缓冲
-            )
-            
-        except asyncio.TimeoutError:
-            logger.error(
-                f"DNS分流测试内部超时（70秒），已完成部分测试",
-                extra={"trace_id": ctx.trace_id}
-            )
-            # ✅ 创建错误结果并保存到Context，确保数据链路完整
-            from sdwan_desktop.services.dns_split import DnsSplitTestResult, DomainDnsResult
-            result = DnsSplitTestResult(
-                total_domains=len(test_domains),
-                errors=[f"DNS分流测试超时（70秒），可能原因：DNS服务器响应慢或网络延迟高"]
-            )
-            # 为未完成的域名创建空结果
-            for domain in test_domains:
-                empty_result = DomainDnsResult(domain=domain)
-                empty_result.is_split = False
-                empty_result.split_description = "测试超时，未完成"
-                result.domain_results.append(empty_result)
-        
-        ctx.set("dns_split_result", result)
-        duration = (datetime.now() - start).total_seconds()
-        
-        # ✅ 清晰明确的串口输出
-        cache_info = f" [缓存命中: {cache_hit_count}/{len(test_domains)}]" if cache_hit_count > 0 else ""
-        print(f"✓ ({duration:.1f}s){cache_info}")
-        
-        # 显示使用的DNS服务器信息
-        print(f"   ℹ️  国内DNS: {', '.join(domestic_dns[:3])}{'...' if len(domestic_dns) > 3 else ''}")
-        print(f"   ℹ️  国际DNS: {', '.join(international_dns[:2])}{'...' if len(international_dns) > 2 else ''}")
-        
-        # ✅ 显示域名分类统计
-        category_stats = {}
-        for dr in result.domain_results:
-            category = DOMAIN_TO_CATEGORY.get(dr.domain, "unknown")
-            if category not in category_stats:
-                category_stats[category] = {"total": 0, "split": 0}
-            category_stats[category]["total"] += 1
-            if dr.is_split:
-                category_stats[category]["split"] += 1
-        
-        if category_stats:
-            print(f"   ℹ️  域名分类统计:")
-            category_names = {
-                "domestic": "国内核心",
-                "international": "国际核心",
-                "enterprise": "企业办公",
-                "cloud": "云服务",
-                "ecommerce_live": "电商直播"
-            }
-            for category, stats in category_stats.items():
-                name = category_names.get(category, category)
-                split_info = f" ⚠️ {stats['split']}个分流" if stats['split'] > 0 else ""
-                print(f"      - {name}: {stats['total']}个{split_info}")
-        
-        split_count = sum(1 for dr in result.domain_results if dr.is_split)
-        if split_count > 0:
-            print(f"   ⚠️ 发现 {split_count} 个域名存在分流差异")
-            for dr in result.domain_results:
-                if dr.is_split:
-                    print(f"      - {dr.domain}: {dr.split_description}")
-        else:
-            print(f"   ✅ 所有域名解析全球一致")
-            
-        return result
-
-    async def step_cpe_link_routing(ctx: FlowContext):
-        # ✅ 检查连通性是否失败，失败则跳过
-        connectivity_failed = ctx.get("connectivity_failed", False)
-        if connectivity_failed:
-            print("⏭️  跳过CPE链路追踪（连通性测试失败）")
-            from sdwan_desktop.services.dns_split import CpeLinkRouteResult
-            result = CpeLinkRouteResult(
-                total_domains_tested=0,
-                domain_results=[],
-                detected_links=[],
-                link_distribution={},
-                is_multi_link=False,
-                multi_link_count=0,
-                errors=["连通性测试失败，跳过CPE链路追踪"]
-            )
-            ctx.set("cpe_link_routing_result", result)
-            return result
-        
-        print("🛣️ 检测CPE链路分流（精简版）... ", end="", flush=True)
-        start = datetime.now()
-        
-        from sdwan_desktop.flow.definitions.quick_check import DEFAULT_TEST_DOMAINS, DOMAIN_TO_CATEGORY
-        test_domains = DEFAULT_TEST_DOMAINS
-        
-        # ✅ 检查并展示缓存使用情况
-        dns_cache_dict = ctx.get("dns_resolution_cache")
-        tcping_cache_dict = ctx.get("tcping_results_cache")
-        
-        dns_hits = sum(1 for d in test_domains if d in dns_cache_dict) if dns_cache_dict else 0
-        tcping_hits = sum(1 for d in test_domains if d in tcping_cache_dict) if tcping_cache_dict else 0
-        
-        try:
-            # ✅ 按需求：Traceroute总超时105秒（7跳×5秒×3次）
-            import asyncio
-            result = await asyncio.wait_for(
-                dns_split_tester.test_cpe_link_routing_optimized(
-                    domains=test_domains,
-                    max_hops=7,  # ✅ 固定7跳
-                    cpe_exit_hop=2,
-                    ctx=ctx,
-                    use_cache=True
-                ),
-                timeout=110  # ✅ 按规范：105秒+5秒缓冲
-            )
-            
-            ctx.set("cpe_link_routing_result", result)
-            duration = (datetime.now() - start).total_seconds()
-            
-            # ✅ 清晰明确的串口输出
-            cache_info = f" [命中DNS:{dns_hits}, TCPing:{tcping_hits}]"
-            print(f"✓ ({duration:.1f}s){cache_info}")
-            
-            # ✅ 显示域名分类统计
-            category_stats = {}
-            for path_result in result.domain_results:  # ✅ 修复：使用正确的属性名 domain_results
-                domain = path_result.domain
-                category = DOMAIN_TO_CATEGORY.get(domain, "unknown")
-                if category not in category_stats:
-                    category_stats[category] = {"total": 0, "reachable": 0, "unreachable": 0}
-                category_stats[category]["total"] += 1
-                if path_result.link_category == "unreachable":
-                    category_stats[category]["unreachable"] += 1
-                else:
-                    category_stats[category]["reachable"] += 1
-            
-            if category_stats:
-                print(f"   ℹ️  域名分类统计:")
-                category_names = {
-                    "domestic": "国内核心",
-                    "international": "国际核心",
-                    "enterprise": "企业办公",
-                    "cloud": "云服务",
-                    "ecommerce_live": "电商直播"
-                }
-                for category, stats in category_stats.items():
-                    name = category_names.get(category, category)
-                    reachability = f"{stats['reachable']}可达/{stats['unreachable']}不可达"
-                    print(f"      - {name}: {reachability}")
-            
-            if result.is_multi_link:
-                print(f"   🌐 检测到多链路分流: {result.multi_link_count}条路径")
-                for link_fp, domains_in_link in result.link_distribution.items():
-                    print(f"      * [{link_fp}]: {', '.join(domains_in_link)}")
-            else:
-                print(f"   ✅ 所有域名使用相同网络路径")
-                
-            return result
-            
-        except asyncio.TimeoutError:
-            from sdwan_desktop.services.dns_split import CpeLinkRouteResult
-            error_result = CpeLinkRouteResult(
-                total_domains_tested=0,
-                domain_results=[],
-                detected_links=[],
-                link_distribution={},
-                is_multi_link=False,
-                multi_link_count=0,
-                errors=[f"CPE链路分流测试超时（70秒限制）"]
-            )
-            ctx.set("cpe_link_routing_result", error_result)
-            duration = (datetime.now() - start).total_seconds()
-            print(f"✗ ({duration:.1f}s) - 测试超时")
-            return error_result
-            
-        except Exception as e:
-            from sdwan_desktop.services.dns_split import CpeLinkRouteResult
-            error_result = CpeLinkRouteResult(
-                total_domains_tested=0,
-                domain_results=[],
-                detected_links=[],
-                link_distribution={},
-                is_multi_link=False,
-                multi_link_count=0,
-                errors=[f"CPE链路分流测试失败: {str(e)}"]
-            )
-            ctx.set("cpe_link_routing_result", error_result)
-            duration = (datetime.now() - start).total_seconds()
-            print(f"✗ ({duration:.1f}s) - {e}")
-            return error_result
-
-    async def step_analyze(ctx: FlowContext):
-        print("📈 分析诊断结果... ", end="", flush=True)
-        start = datetime.now()
-        
-        # ✅ 使用共用的QuickCheckAnalyzer服务（与GUI保持一致）
-        from sdwan_desktop.services.analyzer.quick_check_analyzer import QuickCheckAnalyzer
-        
-        await QuickCheckAnalyzer.analyze(ctx, rule_engine)
-        
-        duration = (datetime.now() - start).total_seconds()
-        print(f"✓ ({duration:.1f}s)")
-        
-        return ctx.get("rule_results")
-
-    async def step_conclusion(ctx: FlowContext):
-        # 生成诊断结论
-        rule_results = ctx.get("rule_results")
-        if not rule_results:
-            return
-            
-        root_causes = []
-        recommendations = []
-        confidence = 1.0
-        
-        # rule_results 是一个 RuleEvaluationResult 对象，包含 results 列表
-        for rr in rule_results.results:
-            if rr.triggered:
-                from sdwan_desktop.core.types.diagnosis import RootCause, Recommendation
-                root_causes.append(RootCause(
-                    cause_id=rr.rule_id,
-                    title=rr.name,
-                    description=rr.message,
-                    severity=rr.severity,
-                    confidence=rr.confidence,
-                    evidence_refs=[],
-                    matched_rules=[rr.rule_id]
-                ))
-                if rr.suggestion:
-                    recommendations.append(Recommendation(
-                        action=rr.suggestion,
-                        priority=1 if rr.severity in [Severity.CRITICAL, Severity.ERROR] else 2,
-                        expected_outcome=rr.message
-                    ))
-
-                confidence = min(confidence, rr.confidence)
-        
-        # 如果没有触发任何规则，说明网络正常
-        if not root_causes:
-            confidence = 1.0
-                
-        diagnosis_result = DiagnosisResult(
-            trace_id=ctx.trace_id,
-            root_causes=root_causes,
-            recommendations=recommendations,
-            overall_confidence=confidence,
-            timestamp=datetime.now().isoformat(),
-            evidences=[ctx.get("evidence_connectivity")] # 关联证据
-        )
-        ctx.set("diagnosis_result", diagnosis_result)
-        return diagnosis_result
-
-    async def step_report(ctx: FlowContext):
-        print("\n📄 生成诊断报告... ", end="", flush=True)
-        start = datetime.now()
-        
-        result = ctx.get("diagnosis_result")
-        
-        # ✅ 显式将 DNS 服务器连通性测试结果存入证据的 probe_results
-        dns_results = ctx.get("dns_results")
-        if dns_results and result:
-            # 查找或创建对应的 Evidence
-            target_evidence = None
-            for ev in result.evidences:
-                if hasattr(ev, 'probe_results'):
-                    target_evidence = ev
-                    break
-            
-            if not target_evidence:
-                from sdwan_desktop.core.types.diagnosis import DiagnosisEvidence
-                target_evidence = DiagnosisEvidence(
-                    step_name="step-dns",
-                    description="DNS服务器连通性测试原始数据"
-                )
-                result.evidences.append(target_evidence)
-            
-            if hasattr(target_evidence, 'probe_results'):
-                # 将 ConnectivityProbeResult 转换为 ProbeResult 格式
-                from sdwan_desktop.core.types.probe import ProbeTarget, ProbeProtocol, ProbeResult, ProbeMetric, ProbeStatus
-                for dns_res in dns_results:
-                    probe_result = ProbeResult(
-                        target=ProbeTarget(host=dns_res.target, protocol=ProbeProtocol.DNS),
-                        status=ProbeStatus.SUCCESS if dns_res.success else ProbeStatus.FAILED,
-                        success=dns_res.success,
-                        metrics=ProbeMetric(
-                            rtt_avg=dns_res.metrics.rtt_avg if dns_res.metrics else None,
-                            resolved_ips=[]
-                        ),
-                        duration_ms=dns_res.duration_ms if hasattr(dns_res, 'duration_ms') else 0.0
-                    )
-                    target_evidence.probe_results.append(probe_result)
-        
-        # 显式将 DNS 分流结果存入证据的 config_snapshots，确保 HTML 构建器能抓取到
-        dns_split_result = ctx.get("dns_split_result")
-        if dns_split_result and result:
-            # 查找或创建对应的 Evidence
-            target_evidence = None
-            for ev in result.evidences:
-                if hasattr(ev, 'config_snapshots'):
-                    target_evidence = ev
-                    break
-            
-            if not target_evidence:
-                from sdwan_desktop.core.types.diagnosis import DiagnosisEvidence
-                target_evidence = DiagnosisEvidence(
-                    step_name="step-dns-split",
-                    description="DNS分流测试原始数据"
-                )
-                result.evidences.append(target_evidence)
-            
-            if hasattr(target_evidence, 'config_snapshots'):
-                target_evidence.config_snapshots["dns_split_result"] = dns_split_result
-        
-        # ✅ 同样处理 CPE 链路分流结果
-        cpe_link_result = ctx.get("cpe_link_routing_result")
-        if cpe_link_result and result:
-            target_evidence = None
-            for ev in result.evidences:
-                if hasattr(ev, 'config_snapshots'):
-                    target_evidence = ev
-                    break
-            
-            if not target_evidence:
-                from sdwan_desktop.core.types.diagnosis import DiagnosisEvidence
-                target_evidence = DiagnosisEvidence(
-                    step_name="step-cpe-link-routing",
-                    description="CPE链路分流测试原始数据"
-                )
-                result.evidences.append(target_evidence)
-            
-            if hasattr(target_evidence, 'config_snapshots'):
-                target_evidence.config_snapshots["cpe_link_routing_result"] = cpe_link_result
-        
-        if not output:
-            reports_dir = Path("./reports")
-            reports_dir.mkdir(exist_ok=True)
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            output_path = reports_dir / f"quick_check_{timestamp}.html"
-        else:
-            output_path = Path(output)
-            
-        try:
-            # ✅ 修复：使用正确的方法名 build_quick_check_report
-            html_content = report_builder.build_quick_check_report(result, output_path)
-            duration = (datetime.now() - start).total_seconds()
-            print(f"✓ ({duration:.1f}s)")
-            print(f"   报告已保存至: {output_path.absolute()}")
-        except Exception as e:
-            duration = (datetime.now() - start).total_seconds()
-            print(f"✗ ({duration:.1f}s)")
-            print(f"   错误: {e}")
-            import traceback
-            traceback.print_exc()
-
-    # 导入flow_control handler
-    from sdwan_desktop.flow.handlers.flow_control import check_connectivity
-    
-    step_handlers = {
-        "step-collect": step_collect,
-        "step-gateway": step_gateway,
-        "step-dns": step_dns,
-        "step-internet": step_internet,
-        "step-connectivity-check": check_connectivity,  # ✅ 新增：连通性检查
-        "step-dns-split": step_dns_split,
-        "step-cpe-link-routing": step_cpe_link_routing,
-        "step-analyze": step_analyze,
-        "step-conclusion": step_conclusion,
-        "step-report": step_report,
-    }
+    step_handlers = build_quick_check_step_handlers(
+        QuickCheckHandlerDeps(
+            collector=collector,
+            connectivity_tester=connectivity_tester,
+            dns_split_tester=dns_split_tester,
+            rule_engine=rule_engine,
+            report_builder=report_builder,
+        ),
+        QuickCheckHandlersParams(
+            report_output=Path(cfg.report_output) if cfg.report_output else None,
+            output_format=cfg.output_format,
+            console=True,
+        ),
+    )
 
     # 运行 Flow
     print("="*60)
@@ -646,20 +137,20 @@ def quick_check(output: Optional[str], fmt: str, verbose: bool, no_parallel: boo
         asyncio.set_event_loop(loop)
         
         # ✅ 修复：使用正确的API调用方式
-        final_ctx = loop.run_until_complete(
+        loop.run_until_complete(
             runtime.execute_flow(
                 flow_def=QUICK_CHECK_FLOW,
                 ctx=ctx,
                 handlers=step_handlers
             )
         )
-        
+
         print("\n" + "="*60)
         print("体检完成！")
         print("="*60)
-        
-        # 显示诊断摘要
-        diagnosis = final_ctx.get("diagnosis_result")
+
+        # 显示诊断摘要（数据在 FlowContext 上，非 execute_flow 返回值）
+        diagnosis = ctx.get("diagnosis_result")
         if diagnosis:
             print(format_diagnosis_summary(diagnosis))
             

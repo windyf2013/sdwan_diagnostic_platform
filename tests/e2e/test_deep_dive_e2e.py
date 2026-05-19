@@ -97,11 +97,31 @@ async def test_deep_dive_happy_path(sample_flow_context, temp_dir):
             ctx.set("topology", topology)
             return topology
 
+        async def step_biz_probe(ctx):
+            ctx.set(
+                "targeted_probe_pc",
+                {"status": "skipped", "data": {}, "error": None, "biz_agg": None},
+            )
+            return {}
+
+        async def step_cpe_post_probe(ctx):
+            ctx.set("targeted_probe", {"status": "skipped", "data": {}, "error": None})
+            return {}
+
+        async def step_overlay_policy_flow(ctx):
+            ctx.set("overlay_policy_flow", {"status": "ok", "data": {}, "error": None})
+            return {}
+
         async def step_root_cause(ctx):
             topology = ctx.get("topology")
             cpe_result = ctx.get("cpe_result")
             pc_data = ctx.get("pc_snapshot")
-            causes = await mock_rce_instance.analyze(topology, cpe_result, pc_data)
+            causes = await mock_rce_instance.analyze(
+                topology,
+                cpe_result,
+                pc_data,
+                targeted_probe=ctx.get("targeted_probe"),
+            )
             ctx.set("root_causes", causes)
             return causes
 
@@ -133,8 +153,11 @@ async def test_deep_dive_happy_path(sample_flow_context, temp_dir):
             "step-cpe-connect": step_cpe_connect,
             "step-cpe-collect": step_cpe_collect,
             "step-topology-build": step_topology_build,
+            "step-biz-probe": step_biz_probe,
+            "step-cpe-post-probe": step_cpe_post_probe,
+            "step-overlay-policy-flow": step_overlay_policy_flow,
             "step-root-cause": step_root_cause,
-            "step-report-gen": step_report_gen
+            "step-report-gen": step_report_gen,
         }
         
         # 执行流程
@@ -202,8 +225,11 @@ async def test_deep_dive_cpe_connection_failure(sample_flow_context):
             "step-cpe-connect": step_cpe_connect,
             "step-cpe-collect": lambda ctx: None,
             "step-topology-build": lambda ctx: None,
+            "step-biz-probe": lambda ctx: None,
+            "step-cpe-post-probe": lambda ctx: None,
+            "step-overlay-policy-flow": lambda ctx: None,
             "step-root-cause": lambda ctx: None,
-            "step-report-gen": lambda ctx: None
+            "step-report-gen": lambda ctx: None,
         }
         
         # 由于 DEEP_DIVE_FLOW 默认 continue_on_error=False，这里预期会抛出异常或记录失败快照

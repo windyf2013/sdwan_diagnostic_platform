@@ -49,6 +49,9 @@ class RootCause(BaseContract):
     confidence: float = 0.0                 # 置信度 0-1
     evidence_refs: List[str] = field(default_factory=list)  # 证据ID列表
     matched_rules: List[str] = field(default_factory=list)  # 匹配的规则
+    current_value: str = ""                 # 当前观测值
+    expected_value: str = ""                # 合理/期望范围
+    remediation: str = ""                   # 处置建议（可操作）
 
 
 @dataclass(slots=True)

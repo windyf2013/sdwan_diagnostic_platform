@@ -39,6 +39,43 @@ def _evaluate_inet_002(ctx: Any) -> bool:
 
 
 @pure_function
+def _evaluate_inet_004(ctx: Any) -> bool:
+    """INET-004: 部分业务探针不可达
+
+    至少有一个互联网探测目标失败，但并非整类（国内/国际）全部失败。
+    """
+    domestic = list(ctx.domestic_target_results)
+    international = list(ctx.international_target_results)
+    all_results = domestic + international
+    if not all_results:
+        return False
+    failed = [r for r in all_results if not r.success]
+    if not failed:
+        return False
+    all_domestic_fail = domestic and all(not r.success for r in domestic)
+    all_intl_fail = international and all(not r.success for r in international)
+    if all_domestic_fail or all_intl_fail:
+        return False
+    return True
+
+
+@pure_function
+def _build_inet_004_message(ctx: Any) -> str:
+    """构建 INET-004 诊断消息"""
+    names = []
+    for r in list(ctx.domestic_target_results) + list(ctx.international_target_results):
+        if not r.success:
+            host = r.target.host if r.target else "unknown"
+            names.append(host)
+    if not names:
+        return "部分业务探针不可达"
+    shown = ", ".join(names[:5])
+    if len(names) > 5:
+        shown += f" 等{len(names)}个"
+    return f"部分业务探针不可达: {shown}"
+
+
+@pure_function
 def _evaluate_inet_003(ctx: Any) -> bool:
     """INET-003: 国际链路丢包严重
 
@@ -116,5 +153,15 @@ CONNECTIVITY_RULES: List[Dict[str, Any]] = [
         "suggestion": "国际链路质量较差，建议联系ISP或使用专线",
         "evaluate_fn": _evaluate_inet_003,
         "message_fn": _build_inet_003_message,
+    },
+    {
+        "rule_id": "INET-004",
+        "name": "部分业务探针不可达",
+        "severity": Severity.WARNING,
+        "confidence": 0.88,
+        "description": "部分互联网业务探针失败，但未出现整类链路全部不可达",
+        "suggestion": "查看连通性测试中失败域名，排查策略路由、防火墙或该站点在本网络是否被限制",
+        "evaluate_fn": _evaluate_inet_004,
+        "message_fn": _build_inet_004_message,
     },
 ]

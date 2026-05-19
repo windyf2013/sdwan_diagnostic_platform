@@ -10,6 +10,7 @@ import os
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from enum import Enum
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from jinja2 import Environment, FileSystemLoader
@@ -61,9 +62,8 @@ class ReportGenerator:
             format: 输出格式
         """
         self.format = format
-        # 初始化 Jinja2 环境
-        template_dir = os.path.join(os.path.dirname(__file__), "..", "..", "reporting", "templates")
-        self.env = Environment(loader=FileSystemLoader(template_dir))
+        template_dir = self._resolve_template_dir()
+        self.env = Environment(loader=FileSystemLoader(str(template_dir)))
         
         # 注册自定义过滤器：为URL生成唯一ID（使用hash）
         def url_hash_filter(url):
@@ -74,6 +74,21 @@ class ReportGenerator:
             return hash_value
         
         self.env.filters['hash'] = url_hash_filter
+
+    @staticmethod
+    def _resolve_template_dir() -> Path:
+        import sys
+
+        from sdwan_desktop.core.app_paths import bundle_root, project_root
+
+        if getattr(sys, "frozen", False):
+            bundled = bundle_root() / "sdwan_desktop" / "reporting" / "templates"
+            if bundled.is_dir():
+                return bundled
+        dev = Path(__file__).resolve().parent.parent.parent / "reporting" / "templates"
+        if dev.is_dir():
+            return dev
+        return project_root() / "src" / "sdwan_desktop" / "reporting" / "templates"
 
     def generate_waterfall_report(self, waterfall: WaterfallResult, issues: List[Dict], output_path: str = None) -> str:
         """生成 Waterfall HTML 报告

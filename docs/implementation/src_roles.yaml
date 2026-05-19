@@ -1,0 +1,8 @@
+# Optional one-line summaries for SRC_INDEX.md (overrides auto-extract from mirror .md).
+# Keys: path relative to repo root, forward slashes, e.g. "src/sdwan_desktop/runtime/engine.py"
+# Values: single-line UTF-8 string (shown in the Role / Summary column).
+#
+# Prefer maintaining ## 职责概述 inside docs/implementation/src/<same path>.md once that
+# file exists; use this file for hot paths before mirror docs are backfilled.
+
+roles: {}

@@ -942,6 +942,13 @@ CI 必须阻断以下检查失败：
 - CI 必须执行禁止模式扫描（`print`、`pprint`、未受控 debug 开关、明文敏感日志）。
 - 报告 schema 校验必须阻断未授权 debug 字段外泄。
 
+#### 2.13.6 源码与功能实现文档镜像（Implementation Doc Mirror）
+
+- **MUST**：对工程根目录 `src/` 下每个纳入版本控制的 `.py` 文件，在 `docs/implementation/src/` 下维护**路径同名**的 `.md` 功能实现说明，映射规则为 `src/<REL>/<NAME>.py` → `docs/implementation/src/<REL>/<NAME>.md`；新建或实质性修改源码时须**同一次变更**更新对应 `.md`。
+- **MUST**：镜像文档的内容结构、非 Python 资产处理、豁免条件与 Agent 指引以 **`spec/00_core/implementation_doc_mirror.md`** 为权威细则；本条款不替代 `spec/` 中架构契约，仅补充**单文件实现层**可追溯说明。
+- **MUST**：`docs/implementation/SRC_INDEX.md` 由 `scripts/generate_implementation_index.py` 生成；变更 `src/`、`docs/implementation/src/`、`docs/implementation/src_roles.yaml` 或该脚本时，须重新运行脚本并提交更新后的索引；**pre-commit** 钩子 `implementation-src-index` 以 `--check` 阻断过期索引。
+- **SHOULD**：CI 对变更的 `src/**/*.py` 校验对应 `docs/implementation/src/**/*.md` 存在且非空（排除团队明确登记的生成代码目录）。
+
 ---
 
 ## 3. 打包与发布标准（Build & Packaging）

@@ -26,9 +26,11 @@ dependencies = [
     "pyside6>=6.5.0",
     "paramiko>=3.0.0",
     "asyncssh>=2.13.0",
+    "telnetlib3>=2.0.0",
     "dnspython>=2.4.0",
     "pythonping>=1.1.0",
     "playwright>=1.40.0",
+    "tzdata>=2024.1",
     "jinja2>=3.1.0",
     "pyyaml>=6.0",
     "wmi>=1.5.0",
@@ -51,9 +53,12 @@ geoip = [
 
 [project.scripts]
 agentctl = "sdwan_desktop.interface.cli.main:main"
+agentctl-core = "sdwan_desktop.interface.cli.main_core:main"
 sdwan-gui = "sdwan_desktop.interface.gui.main_window:main"
+sdwan-gui-core = "sdwan_desktop.interface.gui.main_window_core:main"
 sdwan-waterfall = "sdwan_desktop.interface.cli.commands.waterfall:waterfall"
 sdwan-deep-dive = "sdwan_desktop.interface.cli.commands.deep_dive:deep_dive"
+sdwan-business-diagnose = "sdwan_desktop.interface.cli.commands.business_diagnose:business_diagnose"
 sdwan-quick-check = "sdwan_desktop.interface.cli.commands.quick_check:quick_check"
 
 [tool.hatch.build.targets.wheel]

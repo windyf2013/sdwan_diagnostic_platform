@@ -190,23 +190,14 @@ class ConfigLoader:
         Returns:
             str: 配置文件绝对路径
         """
-        # 尝试从当前工作目录查找
-        candidates = [
-            os.path.join(os.getcwd(), "configs", "quick_check.yaml"),
-            os.path.join(
-                os.path.dirname(__file__), "..", "..", "..", "..", "configs", "quick_check.yaml"
-            ),
-        ]
+        from sdwan_desktop.core.app_paths import resolve_resource_path
 
-        for path in candidates:
-            normalized = os.path.normpath(path)
-            if os.path.exists(normalized):
-                return normalized
+        resolved = resolve_resource_path("configs", "quick_check.yaml")
+        if resolved is not None and resolved.is_file():
+            return str(resolved)
 
-        # 返回默认路径
-        return os.path.normpath(
-            os.path.join(os.getcwd(), "configs", "quick_check.yaml")
-        )
+        fallback = os.path.normpath(os.path.join(os.getcwd(), "configs", "quick_check.yaml"))
+        return fallback
 
     def load(self) -> QuickCheckConfig:
         """加载并解析配置文件

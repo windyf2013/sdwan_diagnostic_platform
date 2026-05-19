@@ -225,10 +225,12 @@ class TraceRouteTool:
                 cmd = ["traceroute", "-n", "-m", str(max_hops), "-w", str(timeout), host]
         
         # ✅ 创建子进程执行命令
-        process = await asyncio.create_subprocess_exec(
+        from sdwan_desktop.core.subprocess_platform import create_subprocess_exec_hidden
+
+        process = await create_subprocess_exec_hidden(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            stderr=asyncio.subprocess.PIPE,
         )
         
         # 执行命令

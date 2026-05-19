@@ -1,0 +1,185 @@
+{% extends "base.html" %}
+
+{% block title %}SD-WAN 业务路径诊断报告{% endblock %}
+
+{% block content %}
+<div class="header">
+    <h1>SD-WAN 业务路径诊断报告</h1>
+    <div class="meta-info">
+        <div class="meta-item">
+            <div class="meta-label">报告 ID</div>
+            <div class="meta-value">{{ report_id }}</div>
+        </div>
+        <div class="meta-item">
+            <div class="meta-label">Trace ID</div>
+            <div class="meta-value">{{ trace_id }}</div>
+        </div>
+        <div class="meta-item">
+            <div class="meta-label">生成时间</div>
+            <div class="meta-value">{{ generated_at }}</div>
+        </div>
+        <div class="meta-item">
+            <div class="meta-label">诊断类型</div>
+            <div class="meta-value">{{ diagnosis_type }}</div>
+        </div>
+        <div class="meta-item">
+            <div class="meta-label">规则版本</div>
+            <div class="meta-value">{{ rule_version }}</div>
+        </div>
+        <div class="meta-item">
+            <div class="meta-label">探测状态</div>
+            <div class="meta-value">{{ probe_status | default('unknown') }}</div>
+        </div>
+    </div>
+</div>
+
+<div class="quick-nav">
+    <span class="quick-nav-title">快速导航:</span>
+    <a href="#summary" class="nav-chip">摘要</a>
+    {% if hypotheses is defined and hypotheses and hypotheses|length > 0 %}
+    <a href="#hypotheses" class="nav-chip">路径假设</a>
+    {% endif %}
+    {% if root_causes and root_causes|length > 0 %}
+    <a href="#root-causes" class="nav-chip critical">根因 ({{ root_causes|length }})</a>
+    {% endif %}
+    <a href="#probes" class="nav-chip">探测明细</a>
+    {% if pc_snapshot is defined and pc_snapshot %}
+    <a href="#pc-snapshot" class="nav-chip">PC 快照</a>
+    {% endif %}
+    {% if report_pack is defined and report_pack %}
+    <a href="#report-product-scope" class="nav-chip">报告定位</a>
+    {% endif %}
+</div>
+
+<div class="section" id="summary">
+    <div class="section-header"><h2>摘要</h2></div>
+    <div class="section-content">
+        <p><strong>严重级别:</strong> {{ severity.value }}</p>
+        <p><strong>置信度:</strong> {{ confidence }}%</p>
+        <p>{{ summary }}</p>
+        {% if aggregate_error %}
+        <div class="info-box warning" style="margin-top: 12px;">
+            <div class="info-box-title">探测侧聚合说明</div>
+            <div class="info-box-content">{{ aggregate_error }}</div>
+        </div>
+        {% endif %}
+        {% if confidence_note is defined and confidence_note %}
+        <p style="margin-top: 12px; padding: 10px; background: var(--bg-light); border-radius: var(--radius-sm);">{{ confidence_note }}</p>
+        {% endif %}
+    </div>
+</div>
+
+{% if hypotheses is defined and hypotheses and hypotheses|length > 0 %}
+<div class="section" id="hypotheses">
+    <div class="section-header"><h2>路径假设（复核用）</h2></div>
+    <div class="section-content">
+        <ul style="margin-left: 1.2em;">
+            {% for h in hypotheses %}
+            <li style="margin-bottom: 8px;"><span class="font-mono">{{ h.id }}</span> — {{ h.statement }}</li>
+            {% endfor %}
+        </ul>
+    </div>
+</div>
+{% endif %}
+
+{% if root_causes and root_causes|length > 0 %}
+<div class="section" id="root-causes">
+    <div class="section-header"><h2>根因分析</h2></div>
+    <div class="section-content">
+        {% for cause in root_causes %}
+        <div class="cause-card" style="margin-bottom: 16px; padding: 16px; background: var(--bg-white); border-radius: var(--radius-md); border: 1px solid var(--border-color);">
+            <div style="font-weight: 600;">{{ cause.title }}</div>
+            <div class="font-mono" style="font-size: 0.85em; color: var(--text-secondary); margin-top: 4px;">{{ cause.cause_id }}</div>
+            <p style="margin-top: 8px;">{{ cause.description }}</p>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
+<div class="section" id="probes">
+    <div class="section-header"><h2>探测明细（DNS A + TCP + Traceroute）</h2></div>
+    <div class="section-content">
+        {% if business_probes and business_probes|length > 0 %}
+        <table style="width: 100%; border-collapse: collapse; font-size: 0.95em;">
+            <thead>
+                <tr style="text-align: left; border-bottom: 1px solid var(--border-color);">
+                    <th style="padding: 8px;">域名</th>
+                    <th style="padding: 8px;">端口</th>
+                    <th style="padding: 8px;">DNS</th>
+                    <th style="padding: 8px;">TCP</th>
+                    <th style="padding: 8px;">Traceroute</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in business_probes %}
+                <tr style="vertical-align: top; border-bottom: 1px solid var(--border-color);">
+                    <td style="padding: 8px;" class="font-mono">{{ row.domain }}</td>
+                    <td style="padding: 8px;">{{ row.port }}</td>
+                    <td style="padding: 8px;">
+                        {% set d = row.dns %}
+                        <span>{{ d.status }}</span>
+                        {% if d.data and d.data.resolved_ips %}
+                        <div class="font-mono" style="margin-top: 4px;">{{ d.data.resolved_ips | join(', ') }}</div>
+                        {% endif %}
+                        {% if d.error %}<div style="color: var(--color-error); margin-top: 4px;">{{ d.error }}</div>{% endif %}
+                    </td>
+                    <td style="padding: 8px;">
+                        {% for t in row.tcp %}
+                        <div style="margin-bottom: 6px;">
+                            <span class="font-mono">{{ t.host }}:{{ t.port }}</span>
+                            <span>{{ t.status }}</span>
+                            {% if t.data %}
+                            <span style="opacity: 0.85;">(open={{ t.data.port_open }})</span>
+                            {% endif %}
+                            {% if t.error %}<div style="color: var(--color-error); font-size: 0.9em;">{{ t.error }}</div>{% endif %}
+                        </div>
+                        {% else %}
+                        <span style="opacity: 0.7;">-</span>
+                        {% endfor %}
+                    </td>
+                    <td style="padding: 8px; font-size: 0.92em;">
+                        {% for tr in row.trace|default([]) %}
+                        <div style="margin-bottom: 8px;">
+                            <span class="font-mono">{{ tr.host }}</span>
+                            <span>{{ tr.status }}</span>
+                            {% if tr.data and tr.data.summary %}
+                            <div style="margin-top: 2px; opacity: 0.9;">
+                                hops={{ tr.data.summary.total_hops }}
+                                reached={{ tr.data.summary.target_reached }}
+                                {% if tr.data.summary.last_hop_ip %}last={{ tr.data.summary.last_hop_ip }}{% endif %}
+                            </div>
+                            {% endif %}
+                            {% if tr.error %}<div style="color: var(--color-error); font-size: 0.9em;">{{ tr.error }}</div>{% endif %}
+                            {% if tr.data and tr.data.hops and tr.data.hops|length > 0 %}
+                            <details style="margin-top: 4px;">
+                                <summary style="cursor: pointer;">跳明细</summary>
+                                <pre style="max-height: 200px; overflow: auto; font-size: 0.82em; margin-top: 4px;">{{ tr.data.hops | tojson(indent=2) }}</pre>
+                            </details>
+                            {% endif %}
+                        </div>
+                        {% else %}
+                        <span style="opacity: 0.7;">-</span>
+                        {% endfor %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p>无探测行数据。</p>
+        {% endif %}
+    </div>
+</div>
+
+{% if pc_snapshot is defined and pc_snapshot %}
+<div class="section" id="pc-snapshot">
+    <div class="section-header"><h2>本机快照（节选）</h2></div>
+    <div class="section-content">
+        <pre style="max-height: 360px; overflow: auto; font-size: 0.82em; background: var(--bg-light); padding: 12px; border-radius: var(--radius-sm);">{{ pc_snapshot | tojson(indent=2) if pc_snapshot is mapping else pc_snapshot }}</pre>
+    </div>
+</div>
+{% endif %}
+
+{% include "partials/report_product_header.html" %}
+{% endblock %}

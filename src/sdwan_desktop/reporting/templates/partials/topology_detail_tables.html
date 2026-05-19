@@ -1,0 +1,183 @@
+{# 纳入「网络拓扑结构」：链路一览 + 节点详细信息 #}
+{% set _tjp = topology.get('topology_joint_presentation', {}) if topology else {} %}
+{% set _pfb = _tjp.get('path_focus_beyond_sdwan', false) %}
+{% set _biz_probe_ok = _tjp.get('business_probe_all_ok', false) %}
+
+{% if topology.get('declared_business_datapath_banner') %}
+<div class="info-box info topology-detail-banner" style="margin-top: 16px;">
+    <div class="info-box-title">路径实证说明</div>
+    <div class="info-box-content" style="font-size: 0.9em; line-height: 1.55;">{{ topology.get('declared_business_datapath_banner') }}</div>
+</div>
+{% endif %}
+
+{% if topology.edges %}
+<div class="card mt-20 topology-detail-card" id="topology-links">
+    <div class="card-header">
+        <div class="card-title">链路一览</div>
+        <span class="badge-count">{{ topology.edges|length }} 条</span>
+    </div>
+    <table>
+        <thead>
+            <tr>
+                <th>源节点</th>
+                <th>目标节点</th>
+                <th>链路类型</th>
+                <th>编址与同网段</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for edge in topology.edges %}
+            {% if not (_bj_suppress and edge.link_type == 'tunnel') %}
+            {% set _edge_fault = edge.problem and not (_pfb and edge.link_type == 'tunnel') %}
+            <tr{% if _edge_fault %} class="table-row-problem"{% endif %}>
+                <td class="font-mono">{{ edge.source_id }}</td>
+                <td class="font-mono">{{ edge.target_id }}</td>
+                <td>{{ edge.link_type }}</td>
+                <td style="font-size:0.9em;color:var(--text-secondary);line-height:1.55;">
+                    {% if _edge_fault %}
+                        <div style="margin-bottom:6px;color:#c62828;font-weight:700;">故障段：{{ edge.problem_layer }} · {{ edge.problem_reason }}</div>
+                    {% elif _pfb and edge.link_type == 'tunnel' %}
+                        <div style="margin-bottom:6px;color:#0d9488;font-weight:600;">{% if _biz_probe_ok %}隧道记录正常；未将声明业务流与隧道面建立路径实证关联（详见路径实证说明）{% else %}隧道记录正常；业务故障示意见拓扑图 Underlay→公网域{% endif %}</div>
+                    {% endif %}
+                    {% if edge.link_type == 'physical' %}
+                        <div><strong>链路</strong>：
+                            <span class="font-mono">{{ edge.source_interface or '—' }}</span>
+                            {% if edge.metadata and edge.metadata.source_interface_name %}（{{ edge.metadata.source_interface_name }}）{% endif %}
+                            ↔
+                            <span class="font-mono">{{ edge.target_interface or '—' }}</span>
+                            {% if edge.metadata and edge.metadata.target_interface_name %}（{{ edge.metadata.target_interface_name }}）{% endif %}
+                        </div>
+                        <div style="margin-top:4px;">
+                            <strong>/24 推断</strong>：
+                            {% if edge.report_same_subnet %}✅ 同段{% else %}⚠️ 非同段{% endif %}
+                            — {{ edge.report_subnet_note or '' }}
+                        </div>
+                    {% elif edge.link_type == 'tunnel' and edge.metadata %}
+                        {% if _bj_suppress %}
+                        <div><strong>隧道链路（设备侧记录）</strong>：未与声明业务建立路径实证关联；不展开 Overlay 编址细节。详见拓扑区「路径实证说明」或使用 <code>agentctl deep-dive</code>。</div>
+                        {% else %}
+                        <div><strong>Underlay</strong>：
+                            <span class="font-mono">{{ edge.metadata.underlay_wan_iface or '—' }}</span>
+                            <span class="font-mono">{{ edge.metadata.underlay_wan_ip or '—' }}</span>
+                            ↔ 下一跳
+                            <span class="font-mono">{{ edge.metadata.underlay_next_hop_ip or '—' }}</span>
+                            {% if edge.report_underlay_ok %}✅ 同/24{% else %}⚠️ 待核对{% endif %}
+                        </div>
+                        <div style="margin-top:6px;"><strong>Overlay（段内邻接）</strong>：
+                            <span class="font-mono">{{ edge.metadata.overlay_local_iface or '—' }}</span>
+                            <span class="font-mono">{{ edge.metadata.overlay_local_ip or '—' }}</span>
+                            ↔
+                            <span class="font-mono">{{ edge.metadata.overlay_segment_peer_ip or '—' }}</span>
+                            {% if edge.report_overlay_segment_ok %}✅ 同前缀内邻接{% else %}⚠️ 待核对{% endif %}
+                        </div>
+                        <div style="margin-top:6px;"><strong>Overlay（隧道对端 / 常为 /32）</strong>：
+                            <span class="font-mono">{{ edge.metadata.overlay_tunnel_peer_ip or '—' }}</span>
+                        </div>
+                        <div style="margin-top:6px;font-size:0.85em;">{{ edge.report_subnet_note or '' }}</div>
+                        {% endif %}
+                    {% elif edge.link_type == 'logical' %}
+                        <div><strong>链路</strong>：
+                            <span class="font-mono">{{ edge.source_interface or '—' }}</span>
+                            {% if edge.metadata and edge.metadata.source_interface_name %}（{{ edge.metadata.source_interface_name }}）{% endif %}
+                            ↔
+                            <span class="font-mono">{{ edge.target_interface or '—' }}</span>
+                            {% if edge.metadata and edge.metadata.target_interface_name %}（{{ edge.metadata.target_interface_name }}）{% endif %}
+                        </div>
+                        <div style="margin-top:6px;">
+                            {% if edge.metadata and edge.metadata.adjacency_evidence == 'session_reachable' %}
+                            <strong>会话可达</strong>：<span>{% if edge.report_same_subnet %}✅ PC 与管理地址同属 /24（推断）{% else %}⚠️ 跨 /24 路由访问管理地址（推断）{% endif %}</span>
+                            {% else %}
+                            <strong>逻辑下一跳</strong>：
+                            {% if edge.report_same_subnet %}✅ {% else %}⚠ {% endif %}
+                            {% endif %}
+                        </div>
+                        <div style="margin-top:4px;font-size:0.88em;">{{ edge.report_subnet_note or '' }}</div>
+                    {% else %}
+                        <span class="font-mono">{{ edge.source_interface or '—' }}</span> ↔ <span class="font-mono">{{ edge.target_interface or '—' }}</span>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endif %}
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
+{% if topology.nodes %}
+<div class="card mt-20 topology-detail-card" id="topology-nodes">
+    <div class="card-header">
+        <div class="card-title">节点详细信息</div>
+        <span class="badge-count">{{ topology.nodes|length }} 个节点</span>
+    </div>
+    <table>
+        <thead>
+            <tr>
+                <th>节点名称</th>
+                <th>IP 地址</th>
+                <th>设备类型</th>
+                <th>厂商 / 型号</th>
+                <th>备注</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for node in topology.nodes %}
+            {% if not (_bj_suppress and node.type == 'hub') %}
+            <tr>
+                <td><strong>{{ node.name or 'Unknown' }}</strong></td>
+                <td class="font-mono">{{ node.ip_address or '—' }}</td>
+                <td>
+                    {% if node.type == 'pc' %}
+                        <span class="tag tag-domestic">💻 客户端</span>
+                    {% elif node.type == 'cpe' %}
+                        <span class="tag badge-link">📡 CPE</span>
+                    {% elif node.type == 'gateway' %}
+                        <span class="tag tag-international">🌐 网关</span>
+                    {% elif node.type == 'hub' %}
+                        <span class="tag" style="background:#ede7f6;color:#5e35b1;">{% if _bj_suppress %}🔷 Hub（逻辑对端）{% else %}🔷 Hub / 隧道对端{% endif %}</span>
+                    {% else %}
+                        <span class="tag">{{ node.type }}</span>
+                    {% endif %}
+                </td>
+                <td class="font-mono" style="font-size:0.9em;">
+                    {% if node.vendor or node.model %}
+                        {{ node.vendor or '' }} {% if node.model %}/ {{ node.model }}{% endif %}
+                    {% else %}
+                        —
+                    {% endif %}
+                </td>
+                <td style="font-size:0.9em;color:var(--text-secondary);">
+                    {% if node.metadata %}
+                        {% set _meta_skip = ('uplink_interfaces', 'downlink_interfaces', 'ingress_paths', 'egress_paths', 'wan_count', 'lan_count', 'vendor_id') %}
+                        {% for k, v in node.metadata.items() %}
+                            {% if k not in _meta_skip %}
+                                {% if v is string or v is number or v is boolean %}
+                                <div style="margin-bottom:4px;"><strong>{{ k }}</strong>: {{ v }}</div>
+                                {% endif %}
+                            {% endif %}
+                        {% endfor %}
+                        {% if node.metadata.uplink_interfaces %}
+                        <div style="margin-top:6px;"><strong>上行</strong>：
+                            {% for row in node.metadata.uplink_interfaces %}
+                            <span class="font-mono">{{ row.interface }}</span> {{ row.ip }}{% if not loop.last %} · {% endif %}
+                            {% endfor %}
+                        </div>
+                        {% endif %}
+                        {% if node.metadata.downlink_interfaces %}
+                        <div style="margin-top:4px;"><strong>下行</strong>：
+                            {% for row in node.metadata.downlink_interfaces %}
+                            <span class="font-mono">{{ row.interface }}</span> {{ row.ip }}{% if not loop.last %} · {% endif %}
+                            {% endfor %}
+                        </div>
+                        {% endif %}
+                    {% else %}
+                        —
+                    {% endif %}
+                </td>
+            </tr>
+            {% endif %}
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}

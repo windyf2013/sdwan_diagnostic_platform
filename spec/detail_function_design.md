@@ -2,6 +2,42 @@
 
 ---
 
+## 〇、三命令产品线定位（QuickCheck / BusinessDiagnose / DeepDive）
+
+本节约定三条 CLI/GUI 流水线的**受众、证据边界、成功判据与升级路径**，与 HTML 报告扉页字段 `report_pack` 对齐；实现见 `sdwan_desktop.services.reporter.report_delivery_context`。
+
+### 〇.1 对比总表
+
+| 维度 | 一键体检 `sdwan-quick-check` / GUI「一键体检」 | 业务路径诊断 `sdwan-business-diagnose` / GUI「业务路径诊断」 | 深度诊断 `sdwan-deep-dive` / GUI「深度诊断」 |
+|------|-----------------------------------------------|----------------------------------------------------------------|-----------------------------------------------|
+| **受众** | 终端用户、一线自助 | 业务负责人、二线（针对**声明的一条业务**） | 运维/集成（CPE 与链路专检） |
+| **主要输入** | 本机（可选流程参数） | `-b FQDN:端口`（可多组）；可选 `-S` DNS；失败或成功+CPE 时 `--cpe-host` 等 | CPE 管理地址与凭证；可选 `-b` 业务探测 |
+| **输出物** | HTML（`quick_check.html`）；JSON 含 `report_pack` | 仅本机：`business_diagnosis.html`；联合 CPE：`deep_dive.html` + `commercial_delivery` | HTML（`deep_dive.html`） |
+| **成功判据（产品语义）** | 流程跑完且生成报告；严重度由规则引擎汇总 | 声明目标 DNS/TCP 探测完成（可选 ICMP traceroute 作路径旁证，**不**单独决定「须联合」）；联合路径另含 CPE 采集与拓扑构建完成 | CPE 连接与采集（及探测步骤）按流程完成并出报告 |
+| **刻意不包含** | CPE 配置解析、隧道 BFD、策略表逐项、对单条业务的 SLA 证明 | 全设备健康巡检、与声明业务无关的全量配置审计 | 不等价于「仅本机」体检；不替代业务方全链路压测 |
+| **证据层级** | 以 **L1（本机探针与系统快照）** 为主 | **L1** + 联合时 **L2（CPE 侧采样：conntrack、ipset、隧道 peer ICMP 等）**；对端/运营商协同为 **L3** | **L2** 为主，叠加本机输入；**L3** 需对端配合时在报告中标注 |
+| **升级路径** | 怀疑与某业务域名/端口相关 → `business-diagnose` | 需全设备配置/隧道/策略专检 → `deep-dive` | 仅需本机环境初判 → `quick-check` |
+
+**表述原则**：对业务诊断采用「**以用户声明的探测目标为锚**」的证据链叙事，不承诺「绝不分析任何与业务无关的配置」——SD-WAN 转发面共享，但**默认排序与报告扉页**围绕声明目标。
+
+### 〇.2 CLI 退出码约定（与实现对齐）
+
+| 退出码 | 含义（约定） |
+|--------|----------------|
+| 0 | 成功完成并生成约定输出 |
+| 2 | 参数/前置条件不满足（如业务失败且未提供 CPE 又未 `--allow-probe-only`） |
+| 1 | 运行时错误、采集失败等其它失败 |
+
+各命令在 `--help` 与 `report_pack.handoff_hint` 中提示升级路径；机器可读字段见 JSON 顶层 `report_pack`。
+
+### 〇.3 与报告字段的对应
+
+- `report_pack.product_line`：`quick_check` \| `business_diagnose` \| `deep_dive`。
+- `report_pack.joint_mode`：业务联合诊断写 `deep_dive` 报告时为 `true`，其余为 `false`。
+- `commercial_delivery`（仅联合业务模板）：业务阅读层归纳，与 `report_pack` 职责分离。
+
+---
+
 ## 一、一键体检(QuickCheck)详细设计
 
 ### 1.1 信息采集清单
@@ -483,6 +519,69 @@ class ConfigParserRegistry:
         raise ValueError("无法识别设备厂商")
 ```
 
+### 2.2.1 Raisecom MSG5200A/B 设备类型指纹（产品规则）
+
+实现位置：`src/sdwan_desktop/services/parser/vendor/raisecom_msg5200.py` 中 `is_raisecom_msg5200b_version_output`、`is_raisecom_msg5200a_version_output`；5200B 专用解析器见同目录 `raisecom_msg5200b.py`。
+
+**禁止**
+
+- **不得**使用 `Software Version` 字段作为 MSG5200A / MSG5200B 类型指纹。5200B 的 `show version` / `show version all` 输出中**通常不包含** `Software Version`；该字段亦不作为可靠代际依据。版本字符串解析同样不得依赖 `Software Version` 作为回退来源。
+
+**MSG5200B（`raisecom_msg5200b`，满足下列任一即判为 B；与 A 互斥）**
+
+| 优先级 | 条件 |
+|--------|------|
+| 1 | `RCIOS version` 主版本为 `4.33.xxx` |
+| 2 | `Product series` 行值**稳定包含子串** `433`（如 `P410_433_2511`） |
+| 3 | `PV` 行为固定代际硬件版本 `B.00` |
+| 4 | `Product Version` 行取值为固定 **`B.00`**（整字段匹配，**不**依据该行是否含 `433` 子串） |
+| 5 | `Product series` 行为 `RCIOS_4.33`（若存在） |
+
+**MSG5200A（`raisecom_msg5200`，显式指纹；排除 B 后由解析器 `detect_vendor` 兜底）**
+
+| 优先级 | 条件 |
+|--------|------|
+| 1 | `RCIOS version` 主版本为 `4.23.xxx` |
+| 2 | `Product Version` 行值含 `423`（历史形态如 `P410_423_xxxx`，与 B 的 `Product series` 中 `433` 区分） |
+| 3 | `PV` 行为固定 **`A.00`** |
+| 4 | `Product Version` 行取值为固定 **`A.00`** |
+| 5 | `Product series` 行为 `RCIOS_4.23`（若存在） |
+
+**说明**：5200A 的 `Product series` 在不同固件上**不一定出现或不稳定**，故**不**将「仅 `Product series` 行含 `423`」作为显式 A 指纹，避免误判。
+
+**注册顺序**：全局 `ConfigParserRegistry` 中须**先注册** `raisecom_msg5200b`，再注册 `raisecom_msg5200`，保证 B 优先于 A 匹配。
+
+### 2.2.2 业务主机探测服务（DNS A + TCP + 可选 Traceroute）
+
+- **实现**：[`src/sdwan_desktop/services/probe/business_host_probe.py`](src/sdwan_desktop/services/probe/business_host_probe.py)（`BizDomainPortSpec`、`parse_biz_target_tokens`、`run_business_domain_port_probes`）；工具经 `ToolDispatcher` 调用已注册的 `dns` / `tcping` / `traceroute`。
+- **行契约**：每行 `business_probes[]` 含 `domain`、`port`、`dns`、`tcp`；可选 `trace`（与解析 IPv4 对齐的列表，每项含 `host`、`port`（业务 TCP 端口，便于与 `tcp` 行对照）、`status`、`data`（成功时含 `summary`：`target_reached`、`total_hops`、`last_hop_ip` 等，及 `hops` 全量）、`error`。**聚合错误 `aggregate_error` 仅含 DNS/TCP 关键失败**；traceroute 失败或「未到达目标」写入 `trace` 行并打日志，**不**触发「须 CPE 联合」门控（ICMP 与 TCP 服务路径可能不一致）。
+- **编排（仅探测）**：[`src/sdwan_desktop/services/diagnosis/business_diagnosis.py`](src/sdwan_desktop/services/diagnosis/business_diagnosis.py) 中 `orchestrate_business_domain_port_diagnosis`；可选 `compare_system_dns`：当传入 `--biz-dns-server` 时对同一域名追加**系统 DNS**与**显式 DNS**的 A 记录对照，结果写入每行 `dns_comparison.split_v4`。可选 `enable_traceroute`（CLI `--no-traceroute` 为关闭）。返回 `BusinessDiagnosisOutcome`（`status`、`business_probes`、`aggregate_error`），**不**内含根因列表，避免与 `RootCauseEngine` 重复归纳。
+- **证据契约**：[`src/sdwan_desktop/core/types/business_rca.py`](src/sdwan_desktop/core/types/business_rca.py) 定义 `ObservationContext`、`ProbeBundle`、`Hypothesis`、`BusinessRCAFinding`；融合引擎 [`business_rca_engine.py`](src/sdwan_desktop/services/diagnosis/business_rca_engine.py)（`BusinessRCAEngine`、`HypothesisGenerator`）消费 PC 观测摘要 + `ProbeBundle`，输出带边界提示的 `RootCause`（如 **BIZ-CONF-001**、**BIZ-DNS-SPLIT-001**）。
+- **路径层规则**：[`business_path_analyzer.py`](src/sdwan_desktop/services/diagnosis/business_path_analyzer.py)（`BusinessPathAnalyzer`）仍负责由 `business_probes` 行生成 **BIZ-DNS-001/002**、**BIZ-TCP-001** 等；`RootCauseEngine` 对 `business_probes` **仅经** `BusinessRCAEngine.analyze`，避免与旧版重复拼接。
+
+### 2.2.3 独立 CLI：`sdwan-business-diagnose` / `agentctl business-diagnose`
+
+- **入口**：[`src/sdwan_desktop/interface/cli/commands/business_diagnose.py`](src/sdwan_desktop/interface/cli/commands/business_diagnose.py)；控制台脚本 `sdwan-business-diagnose`（见 `pyproject.toml` `[project.scripts]`）。
+- **探测失败后的强制路径**：当 **DNS 或 TCP** 任一未达「可视为通达」时（`business_probe_requires_joint_diagnosis`；**不含**仅 traceroute 异常），须继续 **CPE 采集 + 拓扑 + 拓扑后 CPE 命令 + `RootCauseEngine`**（与 deep-dive 证据链一致，实现见 [`business_diagnose_followup.py`](src/sdwan_desktop/services/diagnosis/business_diagnose_followup.py)）。须提供 `--cpe-host` / `-c` 与 `--username` / `-u`（及密码/密钥等，与 deep-dive 相同），否则 CLI **以退出码 2** 终止并提示命令行示例；**仅**接受本机探针层结论文档时显式加 `--allow-probe-only`。
+- **参数（规范长名 / 短名）**：`--biz-target`（`-b`）、`--biz-dns-server`（`-S`）、`--no-traceroute`、`--output`（`-o`）、`--format`（`-F`）、`--collect-pc` / `--no-collect-pc`、`--cpe-host`（`-c`）、`--port` / `-p`（CPE 端口）、`--username` / `-u`、`--password`、`--key-file` / `-k`、`--protocol` / `-P`、`--credentials-file` / `-f`、`--view-credentials-file` / `-V`、`--allow-probe-only`、`--verbose`（`-v`）。
+- **输出**：
+  - **默认 HTML 文件名**（未指定 `-o` 时，写入 `./reports/`）：仅本机为 `business_probe_<YYYYMMDD_HHMMSS>.html`；联合且本机探测未通过为 `business_joint_postfailure_<…>.html`；联合且本机探测已通过（仍带 CPE 做核查）为 `business_joint_verify_<…>.html`。
+  - 探测**全部成功**且**未**连接 CPE：HTML/JSON 为轻量业务报告（`hypotheses`、`root_causes` 经 `BusinessRCAEngine`）。
+  - 探测失败且已完成联合分析，或探测成功但用户仍提供 CPE 并跑联合：HTML 复用 **deep_dive** 模板（含拓扑），但浏览器标题 / 扉页主标题 / `report_pack.product_title` 等与「深度诊断」区分（见 `business_diagnose._write_joint_deep_dive_style_report`、`deep_dive.html`）；JSON 含 `joint_diagnosis: true`、`topology`、`targeted_probe`（若存在）。
+  - **Overlay / 隧道条带与根因过滤门控**：与 `compute_joint_overlay_datapath_gate`（`raisecom_msg5200b_session.py`，规则见 `docs/rules/product_features/raisecom_msg5200b_network_analysis.md` §5.2）对齐。`step-overlay-policy-flow` 是否执行、`underlay_declared_business_focus`、`_filter_business_joint_causes_for_datapath_accuracy` 是否保留 **CPE-002** / **OVERLAY-*** 等隧道库存类根因、以及 `topology_dict` 中 `business_joint_suppress_overlay_topology_presentation`、`declared_business_datapath_banner`、`declared_business_datapath_verdict` 等，均以 gate 的 `show_overlay_tunnel_strip` / `overlay_evidence_positive` 为准，**不得**仅用「nf_conntrack 是否有非空行」二分替代 5200B 会话规则。JSON 联合模式可额外输出 `joint_overlay_rule_case`（gate 的规则分支标识）。
+  - **HTML 呈现**：联合报告页首「结论」区保持综述级判断（见同一规则文档中 HTML 呈现约定）；根因卡片须写清依据，5200B 会话/隧道启发式说明落在根因与证据链，不在结论区堆叠解释。
+- **拓扑问题标记（`_annotate_problem_nodes`）**：**不得**在「声明业务路径已判定 ok」时以粗暴方式清空全部问题标记。须按根因类型补全判断：
+  - 当 `targeted_probe.data.business_probes` 经 `_infer_business_failure_stage` 为 **ok** 时：**抑制** Underlay 上因 **CPE-003/CPE-004**（PC 主地址与策略/NAT 的启发式比对）及以 ``BIZ-DNS``、``BIZ-TCP`` 为前缀的根因所产生的 PC↔CPE 业务路径红段，避免与「探测已通」矛盾。
+  - **仍保留** **CPE-001**（管理不可达）、**RAISECOM-LINK-PROT-001** 等基础设施/设备侧观测类根因在拓扑上的标记。
+  - **CPE-002** 与以 ``OVERLAY-`` 为前缀的根因继续沿用 `joint_datapath_evidence_from_targeted_probe` + `path_beyond_tunnel_likely` 的既有抑制逻辑，不因「仅 business ok」整表抹掉隧道侧结论。
+  - 每次标注前清除 `edges` / `layout_underlay_items` 上旧的 `problem` 字段，再按本轮 `causes` 重算，避免残留边与规则不一致。
+
+### 2.2.4 深度诊断（`sdwan-deep-dive`）中的可选编排
+
+- **目的**：拓扑构建之后，可选在 PC 侧执行业务探测，与 CPE 上 `plan_post_topology_probe_commands` 互补。
+- **CLI**（与 §2.2.3 相同探测语义）：`--biz-target … (-b)`、`--biz-dns-server … (-S)`、`--no-traceroute`；CPE 连接等其余参数见 `sdwan-deep-dive --help`（规范名如 `--cpe-host`、`--username` 等）。
+- **数据落点**：`topology.targeted_probe.data.business_probes`（与 `raw_outputs` 同信封）；业务相关根因由 `RootCauseEngine` 调用 `BusinessRCAEngine` 与 PC 快照/CPE 可达性融合生成；`analyze(..., trace_id=..., pc_snapshot=...)` 须传入以便证据引用。整体 `targeted_probe` 仍满足 `{status, data, error}` 契约。
+
 ### 2.2 厂商解析器实现示例
 
 ```python
@@ -901,133 +1000,39 @@ class CpeConfiguration:
 
 ### 2.5 拓扑构建服务
 
-```python
-# src/sdwan_desktop/services/analyzer/topology_builder.py
+**模块路径**：`src/sdwan_desktop/services/topology/topology_builder.py`（`TopologyBuilder`）；报告富化：`src/sdwan_desktop/interface/cli/commands/deep_dive.py`（`_enrich_topology_report_dict`）；拓扑类型：`src/sdwan_desktop/services/topology/topology.py`。
 
-class TopologyBuilder:
-    """网络拓扑构建器"""
-    
-    def build(
-        self,
-        pc_config: SystemInfoSnapshot,
-        cpe_config: CpeConfiguration
-    ) -> NetworkTopology:
-        """构建PC+CPE网络拓扑"""
-        
-        topology = NetworkTopology()
-        
-        # 1. 添加PC节点
-        pc_node = Node(
-            id="pc",
-            name="本机PC",
-            type=NodeType.PC,
-            ip_addresses=pc_config.ip_config.all_addresses,
-            default_gateway=pc_config.ip_config.default_gateway
-        )
-        topology.add_node(pc_node)
-        
-        # 2. 添加CPE节点
-        cpe_node = Node(
-            id="cpe",
-            name=f"{cpe_config.vendor}-{cpe_config.hostname}",
-            type=NodeType.CPE,
-            ip_addresses=[iface.ip_address for iface in cpe_config.interfaces if iface.ip_address],
-            vendor=cpe_config.vendor,
-            model=cpe_config.model
-        )
-        topology.add_node(cpe_node)
-        
-        # 3. 添加PC到CPE的链路
-        pc_gateway = pc_config.ip_config.default_gateway
-        cpe_lan_iface = cpe_config.get_interface_by_ip(pc_gateway)
-        
-        if cpe_lan_iface:
-            topology.add_edge(Edge(
-                source="pc",
-                target="cpe",
-                type=EdgeType.LAN,
-                source_ip=pc_config.ip_config.ip_address,
-                target_ip=pc_gateway,
-                interface=cpe_lan_iface.name
-            ))
-        
-        # 4. 添加上联网关节点
-        default_route = cpe_config.default_route
-        if default_route and default_route.gateway:
-            upstream_gw = Node(
-                id="upstream_gw",
-                name="上联网关",
-                type=NodeType.UPSTREAM_GW,
-                ip_addresses=[default_route.gateway]
-            )
-            topology.add_node(upstream_gw)
-            
-            topology.add_edge(Edge(
-                source="cpe",
-                target="upstream_gw",
-                type=EdgeType.WAN,
-                target_ip=default_route.gateway,
-                interface=default_route.interface
-            ))
-        
-        # 5. 添加Overlay节点 (SD-WAN Hub)
-        for tunnel in cpe_config.vpn_tunnels:
-            if tunnel.state.lower() == "up":
-                hub_node = Node(
-                    id=f"hub_{tunnel.remote_ip}",
-                    name=f"SD-WAN Hub ({tunnel.remote_color})",
-                    type=NodeType.SDWAN_HUB,
-                    ip_addresses=[tunnel.remote_ip]
-                )
-                topology.add_node(hub_node)
-                
-                topology.add_edge(Edge(
-                    source="cpe",
-                    target=hub_node.id,
-                    type=EdgeType.OVERLAY_TUNNEL,
-                    target_ip=tunnel.remote_ip,
-                    color=tunnel.remote_color,
-                    state=tunnel.state
-                ))
-        
-        # 6. 检测多级NAT
-        self._detect_nat_traversal(topology, pc_config, cpe_config)
-        
-        return topology
-    
-    def _detect_nat_traversal(
-        self,
-        topology: NetworkTopology,
-        pc_config: SystemInfoSnapshot,
-        cpe_config: CpeConfiguration
-    ) -> None:
-        """检测NAT穿透情况"""
-        
-        # 检查PC IP是否为私有地址
-        pc_ip = ipaddress.ip_address(pc_config.ip_config.ip_address)
-        
-        if pc_ip.is_private:
-            # 检查CPE WAN口IP
-            for wan_iface in cpe_config.wan_interfaces:
-                if wan_iface.ip_address:
-                    wan_ip = ipaddress.ip_address(wan_iface.ip_address)
-                    
-                    if wan_ip.is_private:
-                        # 多级NAT: PC私有 -> CPE私有
-                        topology.add_annotation(
-                            "nat_level", 
-                            "multi",
-                            "检测到多级NAT，PC和CPE WAN口均为私有地址"
-                        )
-                        return
-            
-            # 单级NAT: PC私有 -> CPE公网
-            topology.add_annotation(
-                "nat_level",
-                "single",
-                "检测到单级NAT，CPE执行地址转换"
-            )
-```
+**职责**：从 PC 扁平采集数据（`hostname` / `primary_ip` / `arp_table` 等）与 `CpeConfiguration` 构造 `NetworkTopology`。`TopologyBuilder.build(pc_data, cpe_result, cpe_mgmt_ip=…)` 中 **`cpe_mgmt_ip`** 为本次会话所用 CPE 管理地址（通常为 CLI `-c/--cpe`），用于在无二层附着证据时绘制 **会话可达（logical）** 的 PC→CPE 边。
+
+#### Underlay / Overlay
+
+| 平面 | 示意 | `LinkType` |
+|------|------|-------------|
+| Underlay | PC → CPE → 默认路由下一跳 | `PHYSICAL` 或 `LOGICAL` |
+| Overlay | CPE 隧道入口（vxlan 等）→ Hub | `TUNNEL`（首条 `state != down` 隧道） |
+
+#### PC → CPE（无 ICMP）
+
+1. **`PHYSICAL`**：其一即可 —— CPE `arp_entries` 含本 PC IPv4 且映射到已知接口；或 PC `arp_table` 中默认网关 IPv4 的 MAC 与 CPE 某接口 MAC 一致。禁止仅凭「网关 IP 落在 CPE 某接口地址上」作为主要依据。
+2. **`LOGICAL`**：不满足上条，但 **`cpe_result.success`** 且提供 **`cpe_mgmt_ip`** 时，`target_interface = cpe_mgmt_ip`；表示信息采集路径可达，**不表示**已通过 ARP/MAC 证明二层同 LAN。
+
+#### CPE → 默认路由下一跳
+
+按顺序判定（满足即止）并写入 `metadata.adjacency_evidence`：
+
+1. **`cpe_arp_gateway`**：ARP 在所选默认路由的出口接口上对下一跳网关 IP 有可解析条目；→ `PHYSICAL`。
+2. **`explicit_subnet_route`**：在同一出口上存在非默认 IPv4 前缀（长度 ≥ `/24`）同时覆盖本机 WAN 接口 IP 与下一跳；→ `PHYSICAL`。
+3. **`slash24_heuristic`**：两地址同源 `/24`（弱推断）；→ `PHYSICAL`。
+4. **`route_only`**：上述皆否；→ `LOGICAL`。
+
+#### NAT 标注
+
+沿用 `nat_rules`，当边 `source_interface` 命中 `inside_addr` 时设置 `Edge.is_nat` 等字段。
+
+#### HTML 简报
+
+Underlay / Overlay **分两横向行**（自左向右）。`topology.layout_underlay_items` 交织 **节点** 与 **hop**（箭头 + 简报，关联 `report_subnet_note`）；节点卡片内 **左栏上行 / 右栏下行** 接口清单。若无 Overlay：`topology.layout_overlay_placeholder` 占位说明。
+
 
 ---
 

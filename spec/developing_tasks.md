@@ -274,7 +274,14 @@ SD-WAN根因规则:
   - SPLIT-002: 分流策略与实际路径不符
 ```
 
+### 5.4 业务不通根因（与 Sprint 4 并行迭代）
+
+| ID | 任务 | 说明 | 状态 |
+|----|------|------|------|
+| 4.15 | 业务 RCA 证据模型与融合 | `business_rca.py` 契约、`BusinessRCAEngine`、`business-diagnose` 默认 PC 采集、DNS 对照、`deep-dive` 经 `RootCauseEngine` 统一入口；验收见 `tests/unit/services/diagnosis/test_business_rca_qa_matrix.py` | ✅ DONE |
+
 ---
+
 
 ## 6. Sprint 5: 业务监测
 

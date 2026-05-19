@@ -72,11 +72,11 @@ def test_cli_uses_flow_runtime():
             return False
         print(f"✅ CLI 调用了 runtime.execute_flow")
         
-        # 检查是否定义了 handlers
-        if "handlers = {" not in content:
-            print(f"❌ CLI 未定义 handlers")
+        # 检查是否通过共享工厂构建 handlers
+        if "build_quick_check_step_handlers" not in content:
+            print("❌ CLI 未使用 build_quick_check_step_handlers")
             return False
-        print(f"✅ CLI 定义了 handlers")
+        print("✅ CLI 使用 build_quick_check_step_handlers")
         
         print("\n✅ 测试 2 通过\n")
         return True
@@ -117,11 +117,11 @@ def test_gui_uses_flow_runtime():
             return False
         print(f"✅ GUI 调用了 runtime.execute_flow")
         
-        # 检查是否定义了 handlers
-        if "handlers = {" not in content:
-            print(f"❌ GUI 未定义 handlers")
+        # 检查是否通过共享工厂构建 handlers
+        if "build_quick_check_step_handlers" not in content:
+            print("❌ GUI 未使用 build_quick_check_step_handlers")
             return False
-        print(f"✅ GUI 定义了 handlers")
+        print("✅ GUI 使用 build_quick_check_step_handlers")
         
         print("\n✅ 测试 3 通过\n")
         return True
@@ -134,106 +134,108 @@ def test_gui_uses_flow_runtime():
 
 
 def test_handler_consistency():
-    """测试 4: 验证 CLI 和 GUI 的 handlers 一致性"""
+    """测试 4: 验证 CLI 与 GUI 均使用共享的 quick_check 步骤工厂"""
     print("=" * 70)
     print("测试 4: CLI 和 GUI Handlers 一致性")
     print("=" * 70)
-    
+
     try:
-        # 读取 CLI 和 GUI 源码
         cli_file = project_root / "src" / "sdwan_desktop" / "interface" / "cli" / "commands" / "quick_check.py"
         gui_file = project_root / "src" / "sdwan_desktop" / "interface" / "gui" / "tabs" / "quick_check_tab.py"
-        
-        cli_content = cli_file.read_text(encoding='utf-8')
-        gui_content = gui_file.read_text(encoding='utf-8')
-        
-        # 提取 CLI handlers 键名
-        import re
-        cli_handlers_match = re.search(r'handlers\s*=\s*\{([^}]+)\}', cli_content, re.DOTALL)
-        gui_handlers_match = re.search(r'handlers\s*=\s*\{([^}]+)\}', gui_content, re.DOTALL)
-        
-        if not cli_handlers_match:
-            print(f"❌ 无法提取 CLI handlers")
+        cli_content = cli_file.read_text(encoding="utf-8")
+        gui_content = gui_file.read_text(encoding="utf-8")
+
+        if "build_quick_check_step_handlers" not in cli_content:
+            print("❌ CLI 未引用 build_quick_check_step_handlers")
             return False
-        
-        if not gui_handlers_match:
-            print(f"❌ 无法提取 GUI handlers")
+        if "build_quick_check_step_handlers" not in gui_content:
+            print("❌ GUI 未引用 build_quick_check_step_handlers")
             return False
-        
-        # 提取 handler 键名
-        cli_keys = set(re.findall(r'"([^"]+)":\s*\w+', cli_handlers_match.group(1)))
-        gui_keys = set(re.findall(r'"([^"]+)":\s*\w+', gui_handlers_match.group(1)))
-        
-        print(f"CLI handlers: {sorted(cli_keys)}")
-        print(f"GUI handlers: {sorted(gui_keys)}")
-        
-        # 检查一致性
-        if cli_keys != gui_keys:
-            missing_in_gui = cli_keys - gui_keys
-            missing_in_cli = gui_keys - cli_keys
-            if missing_in_gui:
-                print(f"❌ GUI 缺少 handlers: {missing_in_gui}")
-            if missing_in_cli:
-                print(f"❌ CLI 缺少 handlers: {missing_in_cli}")
+
+        from unittest.mock import MagicMock
+
+        from sdwan_desktop.flow.definitions.quick_check import QUICK_CHECK_FLOW
+        from sdwan_desktop.flow.handlers.quick_check_steps import (
+            QuickCheckHandlerDeps,
+            QuickCheckHandlersParams,
+            build_quick_check_step_handlers,
+        )
+
+        dummy = MagicMock()
+        deps = QuickCheckHandlerDeps(
+            collector=dummy,
+            connectivity_tester=dummy,
+            dns_split_tester=dummy,
+            rule_engine=dummy,
+            report_builder=dummy,
+        )
+        keys = set(build_quick_check_step_handlers(deps, QuickCheckHandlersParams()).keys())
+        flow_ids = {s.id for s in QUICK_CHECK_FLOW.steps}
+        if keys != flow_ids:
+            print(f"❌ 工厂 handlers 与 Flow 步骤不一致: {keys ^ flow_ids}")
             return False
-        
-        print(f"✅ CLI 和 GUI handlers 完全一致 ({len(cli_keys)} 个)")
-        
+
+        print(f"✅ 共享工厂覆盖全部 {len(flow_ids)} 个 Flow 步骤")
         print("\n✅ 测试 4 通过\n")
         return True
-        
+
     except Exception as e:
         print(f"❌ 测试 4 失败: {e}")
         import traceback
+
         traceback.print_exc()
         return False
 
 
 def test_flow_steps_coverage():
-    """测试 5: 验证 handlers 覆盖所有 Flow 步骤"""
+    """测试 5: 验证共享工厂 handlers 覆盖所有 Flow 步骤"""
     print("=" * 70)
     print("测试 5: Handlers 覆盖 Flow 步骤")
     print("=" * 70)
-    
+
     try:
+        from unittest.mock import MagicMock
+
         from sdwan_desktop.flow.definitions.quick_check import QUICK_CHECK_FLOW
-        
-        # 获取 Flow 中定义的步骤 ID
+        from sdwan_desktop.flow.handlers.quick_check_steps import (
+            QuickCheckHandlerDeps,
+            QuickCheckHandlersParams,
+            build_quick_check_step_handlers,
+        )
+
         flow_step_ids = {step.id for step in QUICK_CHECK_FLOW.steps}
         print(f"Flow 步骤: {sorted(flow_step_ids)}")
-        
-        # 读取 GUI handlers
-        gui_file = project_root / "src" / "sdwan_desktop" / "interface" / "gui" / "tabs" / "quick_check_tab.py"
-        gui_content = gui_file.read_text(encoding='utf-8')
-        
-        import re
-        gui_handlers_match = re.search(r'handlers\s*=\s*\{([^}]+)\}', gui_content, re.DOTALL)
-        if not gui_handlers_match:
-            print(f"❌ 无法提取 GUI handlers")
-            return False
-        
-        gui_keys = set(re.findall(r'"([^"]+)":\s*\w+', gui_handlers_match.group(1)))
-        print(f"GUI handlers: {sorted(gui_keys)}")
-        
-        # 检查覆盖
-        missing_handlers = flow_step_ids - gui_keys
-        extra_handlers = gui_keys - flow_step_ids
-        
+
+        dummy = MagicMock()
+        deps = QuickCheckHandlerDeps(
+            collector=dummy,
+            connectivity_tester=dummy,
+            dns_split_tester=dummy,
+            rule_engine=dummy,
+            report_builder=dummy,
+        )
+        handler_keys = set(build_quick_check_step_handlers(deps, QuickCheckHandlersParams()).keys())
+        print(f"工厂 handlers: {sorted(handler_keys)}")
+
+        missing_handlers = flow_step_ids - handler_keys
+        extra_handlers = handler_keys - flow_step_ids
+
         if missing_handlers:
             print(f"❌ 缺少 handlers: {missing_handlers}")
             return False
-        
+
         if extra_handlers:
             print(f"⚠️  多余的 handlers: {extra_handlers}")
-        
-        print(f"✅ Handlers 完全覆盖 Flow 步骤")
-        
+
+        print("✅ Handlers 完全覆盖 Flow 步骤")
+
         print("\n✅ 测试 5 通过\n")
         return True
-        
+
     except Exception as e:
         print(f"❌ 测试 5 失败: {e}")
         import traceback
+
         traceback.print_exc()
         return False
 

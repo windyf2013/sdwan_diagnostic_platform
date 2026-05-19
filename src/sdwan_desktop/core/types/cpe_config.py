@@ -5,9 +5,13 @@ CPE配置类型定义
 遵循 SDWAN_SPEC_PATCHES.md PATCH-002 dict边界规则
 """
 
+import re
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict
 from .base import BaseContract
+
+
+_RAISECOM_STYLE_WAN_IFACE = re.compile(r"^(ge|xge)\d+$", re.IGNORECASE)
 
 
 @dataclass(slots=True)
@@ -84,6 +88,19 @@ class VpnTunnelInfo(BaseContract):
     """隧道类型: ipsec/gre等"""
     uptime_seconds: Optional[int] = None
     """运行时长(秒)"""
+    raw_block: Optional[str] = None
+    """running-config 等原始片段(用于报告证据链)"""
+
+
+@dataclass(slots=True)
+class CpeArpEntry:
+    """CPE ARP 表项（厂商解析后统一模型，用于 PC↔CPE 邻接推断）。"""
+
+    ip_address: str = ""
+    mac_address: str = ""
+    interface: str = ""
+    state: str = ""
+    raw_line: Optional[str] = None
 
 
 @dataclass(slots=True)
@@ -130,6 +147,8 @@ class CpeConfiguration(BaseContract):
     """VPN隧道列表"""
     nat_rules: List[NatRuleInfo] = field(default_factory=list)
     """NAT规则列表"""
+    arp_entries: List[CpeArpEntry] = field(default_factory=list)
+    """ARP 表（用于与 PC 侧 ARP 交叉验证三层邻接）"""
     
     # ==================== 调试信息 ====================
     raw_outputs: Dict[str, str] = field(default_factory=dict)
@@ -148,6 +167,7 @@ class CpeConfiguration(BaseContract):
         return [
             iface for iface in self.interfaces
             if any(p in iface.name.lower() for p in wan_patterns)
+            or _RAISECOM_STYLE_WAN_IFACE.match((iface.name or "").strip())
         ]
     
     @property
@@ -159,8 +179,10 @@ class CpeConfiguration(BaseContract):
         """
         lan_patterns = ["ge0/1", "eth1", "lan", "vlan"]
         return [
-            iface for iface in self.interfaces
-            if any(p in iface.name.lower() for p in lan_patterns)
+            iface
+            for iface in self.interfaces
+            if "management" not in (iface.name or "").lower()
+            and any(p in iface.name.lower() for p in lan_patterns)
         ]
     
     @property

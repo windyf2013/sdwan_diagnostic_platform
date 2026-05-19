@@ -6,8 +6,10 @@
 """
 
 import pytest
+from dataclasses import replace
 
 from sdwan_desktop.core.types.cpe_config import (
+    CpeArpEntry,
     CpeConfiguration,
     InterfaceInfo,
     RouteEntry,
@@ -39,7 +41,12 @@ def sample_cpe_config():
         version="20.9.3",
         hostname="CPE-BRANCH-01",
         interfaces=[
-            InterfaceInfo(name="GigabitEthernet0/0", ip_address="192.168.1.1", status="up"),
+            InterfaceInfo(
+                name="GigabitEthernet0/0",
+                ip_address="192.168.1.1",
+                status="up",
+                mac_address="00:11:22:33:44:aa",
+            ),
             InterfaceInfo(name="GigabitEthernet0/1", ip_address="10.0.0.1", status="up"),
             InterfaceInfo(name="Loopback0", ip_address="172.16.0.1", status="up"),
         ],
@@ -74,6 +81,14 @@ def sample_cpe_config():
                 inside_addr="192.168.1.100",
                 outside_addr="203.0.113.100",
                 nat_type="dynamic",
+            ),
+        ],
+        arp_entries=[
+            CpeArpEntry(
+                ip_address="192.168.1.100",
+                mac_address="aa:bb:cc:dd:ee:ff",
+                interface="GigabitEthernet0/0",
+                state="R",
             ),
         ],
     )
@@ -114,7 +129,9 @@ class TestTopologyBuilderBasic:
         successful_cpe_result,
     ):
         """测试完整拓扑构建"""
-        topology = builder.build(sample_pc_data, successful_cpe_result)
+        topology = builder.build(
+            sample_pc_data, successful_cpe_result, cpe_mgmt_ip="192.168.1.254"
+        )
         
         # 验证节点数量
         assert len(topology.nodes) == 4  # PC, CPE, GW, Hub
@@ -212,7 +229,7 @@ class TestTopologyBuilderEdges:
         pc_node = builder._build_pc_node(sample_pc_data)
         cpe_node = builder._build_cpe_node(sample_cpe_config)
         
-        edge = builder._build_pc_to_cpe_edge(pc_node, cpe_node, sample_pc_data)
+        edge = builder._build_pc_to_cpe_edge(pc_node, cpe_node, sample_pc_data, sample_cpe_config)
         
         assert edge is not None
         assert edge.id == "link-pc-cpe"
@@ -221,6 +238,7 @@ class TestTopologyBuilderEdges:
         assert edge.link_type == LinkType.PHYSICAL
         assert edge.source_interface == "192.168.1.100"
         assert edge.target_interface == "192.168.1.1"
+        assert edge.metadata.get("adjacency_evidence") == "cpe_arp"
     
     def test_build_cpe_to_gateway_edge(self, builder, sample_cpe_config):
         """测试 CPE → Gateway 链路构建"""
@@ -236,6 +254,36 @@ class TestTopologyBuilderEdges:
         assert edge.source_id == "cpe-001"
         assert edge.target_id == "gw-001"
         assert edge.link_type == LinkType.PHYSICAL
+        assert edge.metadata.get("adjacency_evidence") == "slash24_heuristic"
+
+    def test_build_cpe_to_gateway_far_next_hop_is_logical(self, builder):
+        """下一跳与本机 WAN 非同源且无 ARP/显式前缀时仅逻辑链路。"""
+        cpe_cfg = CpeConfiguration(
+            vendor="raisecom_msg5200b",
+            routes=[
+                RouteEntry(
+                    destination="0.0.0.0/0",
+                    gateway="203.1.5.254",
+                    interface="Vlan100",
+                    protocol="static",
+                    metric=1,
+                ),
+            ],
+            interfaces=[
+                InterfaceInfo(
+                    name="Vlan100",
+                    ip_address="10.10.88.10",
+                    status="up",
+                ),
+            ],
+            arp_entries=[],
+        )
+        cpe_node = builder._build_cpe_node(cpe_cfg)
+        gw_node = builder._build_gateway_node(cpe_cfg)
+        edge = builder._build_cpe_to_gateway_edge(cpe_node, gw_node, cpe_cfg)
+        assert edge is not None
+        assert edge.link_type == LinkType.LOGICAL
+        assert edge.metadata.get("adjacency_evidence") == "route_only"
     
     def test_build_cpe_to_hub_edge(self, builder, sample_cpe_config):
         """测试 CPE → Hub 链路构建"""
@@ -249,6 +297,32 @@ class TestTopologyBuilderEdges:
         assert edge.source_id == "cpe-001"
         assert edge.target_id == "hub-001"
         assert edge.link_type == LinkType.TUNNEL
+
+
+class TestTopologyBuilderLogicalAttachments:
+    """PC→CPE 逻辑可达边（采集成功且无二层证据）"""
+
+    def test_logical_pc_when_no_attachment_but_mgmt_success(
+        self,
+        builder,
+        sample_pc_data,
+        successful_cpe_result,
+    ):
+        stripped = replace(
+            successful_cpe_result.data["cpe_configuration"], arp_entries=[]
+        )
+        result = CollectorResult(
+            success=True,
+            data={"cpe_configuration": stripped},
+            collected_items=list(successful_cpe_result.collected_items),
+        )
+        topo = builder.build(sample_pc_data, result, cpe_mgmt_ip="203.12.44.81")
+        log_e = next((e for e in topo.edges if e.id == "link-pc-cpe-logical"), None)
+        assert log_e is not None
+        assert log_e.link_type == LinkType.LOGICAL
+        assert log_e.metadata.get("adjacency_evidence") == "session_reachable"
+        phys = next((e for e in topo.edges if e.id == "link-pc-cpe"), None)
+        assert phys is None
 
 
 class TestTopologyBuilderNAT:
@@ -321,13 +395,15 @@ class TestTopologyBuilderSerialization:
     
     def test_topology_to_dict(self, builder, sample_pc_data, successful_cpe_result):
         """测试拓扑序列化为字典"""
-        topology = builder.build(sample_pc_data, successful_cpe_result)
+        topology = builder.build(
+            sample_pc_data, successful_cpe_result, cpe_mgmt_ip="192.168.1.254"
+        )
         topo_dict = topology.to_dict()
         
         # 验证字典结构
         assert "nodes" in topo_dict
         assert "edges" in topo_dict
-        assert "pc_node_id" in topo_dict
+        assert "topology_notes" in topo_dict
         assert "cpe_node_id" in topo_dict
         
         # 验证节点数量
@@ -344,13 +420,86 @@ class TestTopologyBuilderSerialization:
         """测试拓扑可 JSON 序列化"""
         import json
         
-        topology = builder.build(sample_pc_data, successful_cpe_result)
+        topology = builder.build(
+            sample_pc_data, successful_cpe_result, cpe_mgmt_ip="192.168.1.254"
+        )
         topo_dict = topology.to_dict()
         
         # 应该可以成功序列化为 JSON
         json_str = json.dumps(topo_dict)
         assert isinstance(json_str, str)
         assert len(json_str) > 0
+
+
+class TestTopologyBuilderArpAdjacency:
+    """PC→CPE 附着：仅 ARP 可验证证据"""
+
+    def test_no_attachment_without_arp_evidence(self, builder):
+        cpe = CpeConfiguration(
+            vendor="raisecom_msg5200b",
+            hostname="cpe",
+            interfaces=[
+                InterfaceInfo(name="vlan1", ip_address="10.10.25.1", status="up"),
+                InterfaceInfo(
+                    name="ge1",
+                    ip_address="192.168.20.20",
+                    status="up",
+                    mac_address="aa:aa:aa:aa:aa:aa",
+                ),
+            ],
+            routes=[
+                RouteEntry(
+                    destination="0.0.0.0/0",
+                    gateway="192.168.20.1",
+                    interface="ge1",
+                    protocol="static",
+                    metric=1,
+                )
+            ],
+            arp_entries=[],
+            vpn_tunnels=[],
+            nat_rules=[],
+        )
+        ip, name, same, ev = builder._select_cpe_attachment_for_pc(
+            "10.10.100.161",
+            {"default_gateway": "10.10.100.1", "arp_table": []},
+            cpe,
+        )
+        assert ip is None
+        assert ev == ""
+
+    def test_attachment_via_pc_gateway_arp_mac(self, builder):
+        cpe = CpeConfiguration(
+            vendor="raisecom_msg5200b",
+            hostname="cpe",
+            interfaces=[
+                InterfaceInfo(
+                    name="vlan400",
+                    ip_address="10.10.100.1",
+                    status="up",
+                    mac_address="00:11:22:33:44:55",
+                ),
+            ],
+            routes=[],
+            arp_entries=[],
+            vpn_tunnels=[],
+            nat_rules=[],
+        )
+        pc_data = {
+            "default_gateway": "10.10.100.1",
+            "arp_table": [
+                {
+                    "ip_address": "10.10.100.1",
+                    "mac_address": "00-11-22-33-44-55",
+                    "interface": "10.10.100.161",
+                }
+            ],
+        }
+        ip, name, same, ev = builder._select_cpe_attachment_for_pc("10.10.100.161", pc_data, cpe)
+        assert ip == "10.10.100.1"
+        assert name == "vlan400"
+        assert ev == "pc_arp_gateway_mac"
+        assert same is True
 
 
 class TestTopologyBuilderHelperMethods:

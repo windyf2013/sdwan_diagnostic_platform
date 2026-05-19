@@ -1,0 +1,82 @@
+{# 三条产品线共用扉页：依赖 context.report_pack（dict） #}
+{% if report_pack is defined and report_pack %}
+<div class="section" id="report-product-scope">
+    <div class="section-header collapsible collapsed">
+        <h2>报告定位与范围（商用交付元数据）</h2>
+    </div>
+    <div class="section-content collapse-content hidden">
+        <div class="info-box info" style="margin-bottom: 12px;">
+            <div class="info-box-title">{{ report_pack.product_title }}</div>
+            <div class="info-box-content">
+                <p style="margin: 6px 0;"><strong>副标题:</strong> {{ report_pack.product_subtitle }}</p>
+                <p style="margin: 6px 0; font-size: 0.9em; color: var(--text-secondary);">
+                    <span class="font-mono">product_line={{ report_pack.product_line }}</span>
+                    {% if report_pack.joint_mode %} · <strong>联合模式</strong>{% endif %}
+                </p>
+                <p style="margin: 8px 0 0; font-size: 0.88em;">
+                    <strong>规则版本:</strong> {{ report_pack.rule_version }}
+                    · <strong>生成时间(UTC):</strong> <span class="font-mono">{{ report_pack.generated_at_iso }}</span>
+                    {% if not report_pack.joint_mode %}
+                    · <strong>Trace ID:</strong> <span class="font-mono">{{ report_pack.trace_id }}</span>
+                    {% endif %}
+                </p>
+            </div>
+        </div>
+
+        <div class="info-box" style="margin-bottom: 12px;">
+            <div class="info-box-title">证据层级（L1 / L2 / L3）</div>
+            <div class="info-box-content">
+                <ul style="margin: 0; padding-left: 1.2em;">
+                    {% for row in report_pack.evidence_tiers %}
+                    <li style="margin: 8px 0;">
+                        <strong class="font-mono">{{ row.tier }}</strong> — {{ row.title }}：{{ row.detail }}
+                    </li>
+                    {% endfor %}
+                </ul>
+            </div>
+        </div>
+
+        <div class="info-box success" style="margin-bottom: 12px;">
+            <div class="info-box-title">本报告默认覆盖（Included）</div>
+            <div class="info-box-content">
+                <ul style="margin: 0; padding-left: 1.2em;">
+                    {% for line in report_pack.scope_included %}
+                    <li style="margin: 4px 0;">{{ line }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
+        </div>
+
+        <div class="info-box warning" style="margin-bottom: 12px;">
+            <div class="info-box-title">本报告刻意不包含（Excluded）</div>
+            <div class="info-box-content">
+                <ul style="margin: 0; padding-left: 1.2em;">
+                    {% for line in report_pack.scope_excluded %}
+                    <li style="margin: 4px 0;">{{ line }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
+        </div>
+
+        {% if report_pack.handoff_hints and report_pack.handoff_hints|length > 0 %}
+        <div class="info-box info" style="margin-bottom: 12px;">
+            <div class="info-box-title">升级 / 衔接建议</div>
+            <div class="info-box-content">
+                <ul style="margin: 0; padding-left: 1.2em;">
+                    {% for h in report_pack.handoff_hints %}
+                    <li style="margin: 6px 0;">{{ h }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
+        </div>
+        {% endif %}
+
+        {% if report_pack.audit_note %}
+        <div class="info-box warning">
+            <div class="info-box-title">合规与分发提示</div>
+            <div class="info-box-content">{{ report_pack.audit_note }}</div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endif %}

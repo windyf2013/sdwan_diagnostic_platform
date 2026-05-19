@@ -27,22 +27,26 @@ repos:
 
   - repo: local
     hooks:
+      - id: implementation-src-index
+        name: Regenerate docs/implementation/SRC_INDEX.md if stale
+        entry: python scripts/generate_implementation_index.py --check
+        language: system
+        pass_filenames: false
+        files: ^(src/.*|docs/implementation/src/.*|docs/implementation/src_roles\.yaml|scripts/generate_implementation_index\.py)$
       - id: check-spec-compliance
         name: Check SDWAN Spec Compliance
-        entry: python -c "
-import sys
-import os
-sys.path.insert(0, 'src')
-try:
-    from sdwan_desktop.runtime_validator.base import validate_project_structure
-    if validate_project_structure():
-        sys.exit(0)
-    else:
-        sys.exit(1)
-except ImportError:
-    print('Runtime validator not installed, skipping spec compliance check')
-    sys.exit(0)
-"
+        entry: python
+        args:
+          - -c
+          - |
+            import sys
+            sys.path.insert(0, "src")
+            try:
+                from sdwan_desktop.runtime_validator.base import validate_project_structure
+                sys.exit(0 if validate_project_structure() else 1)
+            except ImportError:
+                print("Runtime validator not installed, skipping spec compliance check")
+                sys.exit(0)
         language: system
         pass_filenames: false
         always_run: true
