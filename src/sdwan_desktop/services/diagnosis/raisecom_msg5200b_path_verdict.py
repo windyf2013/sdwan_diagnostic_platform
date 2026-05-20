@@ -42,8 +42,9 @@ def build_joint_path_evidence_dict(
     cpe: Optional[CpeConfiguration],
     topology_dict: Optional[Dict[str, Any]],
     gate: JointOverlayDatapathGate,
+    declared_path_analysis: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """5200B 联合报告证据链：L1 会话 + L3 FIB 摘要（供模板 ``joint_path_evidence``）。"""
+    """5200B 联合报告证据链：L1 会话 + L3 FIB + 可选路径分析（供模板 ``joint_path_evidence``）。"""
     tp = targeted_probe if isinstance(targeted_probe, dict) else None
     data = tp.get("data") if tp else {}
     data = data if isinstance(data, dict) else {}
@@ -56,7 +57,7 @@ def build_joint_path_evidence_dict(
         "heuristic": "启发式",
         "underlay_only": "仅 Underlay",
     }.get(gate.evidence_tier, gate.evidence_tier)
-    return {
+    out: Dict[str, Any] = {
         "status": "ok",
         "rule_case": gate.rule_case,
         "evidence_tier": gate.evidence_tier,
@@ -86,6 +87,12 @@ def build_joint_path_evidence_dict(
             "egress_shape": trace_ev.egress_shape or "",
         },
     }
+    if isinstance(declared_path_analysis, dict) and declared_path_analysis:
+        out["declared_business_path_analysis"] = declared_path_analysis
+        reach = declared_path_analysis.get("reachability")
+        if isinstance(reach, dict) and reach:
+            out["reachability"] = reach
+    return out
 
 
 def _tier_banner_prefix(tier: EvidenceTier) -> str:

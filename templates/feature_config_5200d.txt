@@ -1,0 +1,50 @@
+Username:                                                                                                                                                                                   
+Username: CMCCAdmin
+Password: 
+host> enable
+host# 
+host# 
+host# testnode
+Password: 
+host(test-node)# show version all
+Product series  : P410_433 
+Compile time    : May  9 2026 19:16:43 
+Device uptime   : 0 Years, 0 Days, 0 hours, 7 minutes, 59 seconds.
+
+PN              : MSG5200-2GEC-4E-X4                #产品型号 raisecom 5200D 系列产品 , 专有型号 , x86 架构
+Batch Number    : CM01 
+Customer        : raisecom 
+SubCustomer     : raisecom 
+Serial Number   : raisecom 
+System Loid     : raisecom 
+Gpon SN         : raisecom 
+Active image    : 2 
+RCIOS version   : 4.33.51.20260509 
+System MAC      : 00:00:01:02:e6:04 
+Bootrom version : 1.0.0
+ 
+PV              : D.00                              #硬件型号,  raisecom 5200D 系列产品
+PCB Version     : D.0 
+BOM Version     : D.0 
+
+
+host(test-node)# end
+host# 
+host# configure terminal 
+host(config)# netconf 
+host(config-netconf)# 
+host(config-netconf)# show callhome all 
+host(config-netconf)#                               # 没有 netconf 配置情况下, 没有输出
+host(config-netconf)# end
+host# 
+host# su
+Password: 
+Linux host 5.10.70 #2 SMP Sat May 9 13:45:09 CST 2026 x86_64 x86_64 x86_64 GNU/Linux
+root@host:/#                                        # su 诊断视图命令行提示符不同 , 需要识别
+root@host:/# ip rule show 
+0:      from all lookup local
+32765:  from all fwmark 0x66 lookup 99
+32766:  from all lookup main
+32767:  from all lookup default
+root@host:/# 
+root@host:/# 

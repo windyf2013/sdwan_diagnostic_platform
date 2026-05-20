@@ -3,7 +3,8 @@
 {% set _pfb = _tjp.get('path_focus_beyond_sdwan', false) %}
 {% set _biz_probe_ok = _tjp.get('business_probe_all_ok', false) %}
 
-{% if topology.get('declared_business_datapath_banner') %}
+{% set _joint_tbl = topology.get('report_html_h1') if topology else false %}
+{% if topology.get('declared_business_datapath_banner') and not _joint_tbl %}
 <div class="info-box info topology-detail-banner" style="margin-top: 16px;">
     <div class="info-box-title">路径实证说明</div>
     <div class="info-box-content" style="font-size: 0.9em; line-height: 1.55;">{{ topology.get('declared_business_datapath_banner') }}</div>
@@ -11,6 +12,7 @@
 {% endif %}
 
 {% if topology.edges %}
+{% if _joint_tbl %}<details class="topology-detail-fold"><summary class="topology-detail-fold-summary">链路一览（{{ topology.edges|length }} 条）</summary>{% endif %}
 <div class="card mt-20 topology-detail-card" id="topology-links">
     <div class="card-header">
         <div class="card-title">链路一览</div>
@@ -102,9 +104,11 @@
         </tbody>
     </table>
 </div>
+{% if _joint_tbl %}</details>{% endif %}
 {% endif %}
 
 {% if topology.nodes %}
+{% if _joint_tbl %}<details class="topology-detail-fold"><summary class="topology-detail-fold-summary">节点详情（{{ topology.nodes|length }} 个）</summary>{% endif %}
 <div class="card mt-20 topology-detail-card" id="topology-nodes">
     <div class="card-header">
         <div class="card-title">节点详细信息</div>
@@ -180,4 +184,5 @@
         </tbody>
     </table>
 </div>
+{% if _joint_tbl %}</details>{% endif %}
 {% endif %}

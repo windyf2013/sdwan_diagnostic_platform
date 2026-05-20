@@ -19,6 +19,10 @@ import re
 from typing import Any, Dict, List, Optional, Sequence
 
 from sdwan_desktop.core.types.diagnosis import DiagnosisResult, RootCause, Severity
+from sdwan_desktop.services.analyzer.heuristic_cause_consolidation import (
+    CONSOLIDATED_CONFIG_HEURISTIC_ID,
+    CONFIG_HEURISTIC_SOURCE_IDS,
+)
 from sdwan_desktop.services.reporter.joint_commercial_delivery import (
     JointDatapathEvidence,
     _business_probe_rows_all_ok,
@@ -178,9 +182,10 @@ def _phenomenon_ok_line(rows: Sequence[dict], *, result_line: str) -> str:
 # 主因与待核对分层
 # ---------------------------------------------------------------------------
 
-# 当 ``beyond_tunnel_edge=True``（已出 CPE 邻域、对端以远）时，下列 cause_id 不得作为页首主因，
-# 仅作为 secondary_findings 「待核对项」。与 _annotate_problem_nodes 的 suppress_heuristic 同源。
-_HEURISTIC_CONFIG_CAUSE_IDS: frozenset[str] = frozenset({"CPE-003", "CPE-004"})
+# 配置启发式不得作为页首主因；合并后 ID 与源 ID 均进入待核对（源 ID 仅兼容未合并的旧载荷）。
+_HEURISTIC_CONFIG_CAUSE_IDS: frozenset[str] = frozenset(
+    CONFIG_HEURISTIC_SOURCE_IDS | {CONSOLIDATED_CONFIG_HEURISTIC_ID}
+)
 
 
 def _primary_label_for_cause(
@@ -264,20 +269,13 @@ def _primary_fault_label(
     return ""
 
 
-# 启发式根因 → 「待核对项」展示文案（避免误读为已确认的 NAT/策略故障）。
+# 启发式根因 → 「待核对项」：仅一条综合项，禁止 CPE-003/004 并列堆叠。
 _HEURISTIC_FINDING_TEMPLATE: Dict[str, Dict[str, str]] = {
-    "CPE-003": {
-        "label": "策略源前缀静态未命中（待核对）",
+    CONSOLIDATED_CONFIG_HEURISTIC_ID: {
+        "label": "配置静态核对（综合结论，待人工复核）",
         "note": (
-            "PC 快照主地址与 SD-WAN 策略 source 前缀做了静态比对，未必反映真实出站源。"
-            "请结合 nf_conntrack 中本流的 src 与上游 NAT 视图核对，不要等同于「策略未生效」。"
-        ),
-    },
-    "CPE-004": {
-        "label": "NAT inside 网段静态未覆盖（待核对）",
-        "note": (
-            "PC 快照主地址与 CPE NAT inside 规则做了静态比对。若路径上存在上游 NAT/三层网关改写源，"
-            "CPE 视角看不到 PC 私网源属常见情况；不得仅凭此判定 NAT 失效。"
+            "策略源前缀、NAT inside 与 Overlay 告警已合并为单一结论；"
+            "须结合 nf_conntrack 源、路径门控与证据链核对，不得等同于转发面故障。"
         ),
     },
     "CPE-002-WARN": {
@@ -293,12 +291,50 @@ def _secondary_findings(
     primary_fault: str,
     beyond_tunnel_edge: bool,
 ) -> List[Dict[str, str]]:
-    """从根因列表生成「待核对」项；不重复 primary_fault 已表达的故障。"""
+    """从根因列表生成「待核对」项；配置启发式仅一条，不重复 primary_fault。"""
     out: List[Dict[str, str]] = []
     seen: set[str] = set()
+
+    consolidated = next(
+        (c for c in causes if (c.cause_id or "") == CONSOLIDATED_CONFIG_HEURISTIC_ID),
+        None,
+    )
+    legacy_config = [
+        c
+        for c in causes
+        if (c.cause_id or "") in CONFIG_HEURISTIC_SOURCE_IDS
+        and (c.cause_id or "") != "CPE-002-WARN"
+    ]
+    if consolidated is not None:
+        cid = CONSOLIDATED_CONFIG_HEURISTIC_ID
+        seen.add(cid)
+        seen.update(CONFIG_HEURISTIC_SOURCE_IDS)
+        note = (consolidated.description or "").strip()[:220]
+        if not note:
+            note = _HEURISTIC_FINDING_TEMPLATE[cid]["note"]
+        out.append(
+            {
+                "id": cid,
+                "label": (consolidated.title or _HEURISTIC_FINDING_TEMPLATE[cid]["label"])[:80],
+                "note": note,
+            }
+        )
+    elif legacy_config:
+        seen.update(CONFIG_HEURISTIC_SOURCE_IDS)
+        note = _HEURISTIC_FINDING_TEMPLATE[CONSOLIDATED_CONFIG_HEURISTIC_ID]["note"]
+        out.append(
+            {
+                "id": CONSOLIDATED_CONFIG_HEURISTIC_ID,
+                "label": _HEURISTIC_FINDING_TEMPLATE[CONSOLIDATED_CONFIG_HEURISTIC_ID]["label"],
+                "note": note,
+            }
+        )
+
     for c in sorted(causes, key=_cause_priority):
         cid = c.cause_id or ""
         if cid in seen:
+            continue
+        if cid in CONFIG_HEURISTIC_SOURCE_IDS:
             continue
         seen.add(cid)
         tmpl = _HEURISTIC_FINDING_TEMPLATE.get(cid)

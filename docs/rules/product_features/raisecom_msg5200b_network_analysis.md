@@ -95,7 +95,11 @@ flowchart TB
 
 - `plugin install urlaccelerate` 下两个 `url-group`：`acceleratePlus`（注释：**DNS 命中后报文标记 0x66**）、`liveBroadcast`（**0x67**）。
 - 配置项 **`dns server`** 指向不同公共 DNS，**优先级高于本地 DNS**，使 **不同业务域名解析走不同探测路径**，从而把解析得到的 **目的 IP** 写入不同 ipset。
-- **`url match suffix`**：后缀匹配域名列表。
+- **`url match {fuzzy|precise|suffix}`**（CLI 三选一，见 `whole_config_5200b.txt` L426）：
+  - **suffix**：列表条目为域名后缀（`music.google.com` 命中 `google.com`）。
+  - **precise**：声明 FQDN 与列表条目完全一致。
+  - **fuzzy**：含 precise/suffix 子情形，且列表条目可为声明域中的独立标签（如列表 `google` 命中 `www.google.com`）。
+- 实现：`raisecom_msg5200b_url_group.domain_matches_url_group_entry`。
 - **`security ip enable` + `source ip`**：仅允许名单内源 IP 参与策略；**同一终端在两组中可并存，真正分流由目的 ipset + 规则顺序决定**。
 
 ### 4.2 iptables PREROUTING 顺序（与 url-group priority 对齐）

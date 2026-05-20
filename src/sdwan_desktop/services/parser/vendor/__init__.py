@@ -141,11 +141,13 @@ def _get_registry():
         from .cisco_sdwan import CiscoSdwanParser
         from .raisecom_msg5200 import RaisecomMsg5200Parser
         from .raisecom_msg5200b import RaisecomMsg5200BParser
+        from .raisecom_msg5200d import RaisecomMsg5200DParser
 
         registry = ConfigParserRegistry()
         # 直接操作内部字典以避免触发类方法导致的递归
         registry._parsers[CiscoSdwanParser().get_vendor_name()] = CiscoSdwanParser()
-        # 5200B 需在 5200A 之前注册，保证 ``list_vendors`` / 探测顺序优先匹配 XGE 产品线
+        # 5200D/B 须在 5200A 之前注册；5200D 须在 5200B 之前（同 series 433 时 PV D.00 优先）
+        registry._parsers[RaisecomMsg5200DParser().get_vendor_name()] = RaisecomMsg5200DParser()
         registry._parsers[RaisecomMsg5200BParser().get_vendor_name()] = RaisecomMsg5200BParser()
         registry._parsers[RaisecomMsg5200Parser().get_vendor_name()] = RaisecomMsg5200Parser()
         _get_registry._registry = registry

@@ -109,6 +109,18 @@ async def _fake_execute_partial_allow(flow_def, ctx, handlers):
     return {}
 
 
+def test_joint_overlay_gate_from_cli_context_no_name_error() -> None:
+    """回归：Phase E 瘦身后须保留 compute_joint_overlay_datapath_gate 导入。"""
+    from sdwan_desktop.interface.cli.commands import business_diagnose as mod
+
+    assert hasattr(mod, "compute_joint_overlay_datapath_gate"), (
+        "business_diagnose 模块须导出 compute_joint_overlay_datapath_gate；"
+        "联合完成收尾与 JSON 输出均依赖此符号。"
+    )
+    gate = mod._joint_overlay_gate_from_cli_context(None, None, None)
+    assert gate.rule_case
+
+
 def test_business_diagnose_json_writes_file(runner, tmp_path):
     from sdwan_desktop.interface.cli.commands.business_diagnose import business_diagnose
 

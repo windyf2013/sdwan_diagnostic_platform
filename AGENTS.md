@@ -11,6 +11,8 @@ python -m pytest <paths> -q --tb=short
 
 改码后按 `memory-bank/test_map.yaml` 推导路径；完成前首行汇报 `pytest: N passed, M failed`。
 
+**5200B 声明路径 Phase E**：须跑 `python scripts/verify_5200b_path_phase_e.py`（含 joint_done CLI）；实机见 `docs/acceptance/5200B_JOINT_PATH_ACCEPTANCE.md`。
+
 ## 必守
 
 - `.cursor/rules/sdwan-p0-core.md`（P0，always apply）

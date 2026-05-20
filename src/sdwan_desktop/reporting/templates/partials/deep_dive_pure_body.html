@@ -57,8 +57,8 @@
 </div>
 
 <div class="section" id="summary">
-    <div class="section-header"><h2>摘要</h2></div>
-    <div class="section-content">
+    <div class="section-header collapsible"><h2>摘要</h2></div>
+    <div class="section-content collapse-content">
         <p><strong>严重级别:</strong> {{ severity.value }}</p>
         <p><strong>置信度:</strong> {{ confidence }}%</p>
         <p>{{ summary }}</p>
@@ -143,8 +143,8 @@
 
 {% if root_causes and root_causes|length > 0 %}
 <div class="section" id="root-causes">
-    <div class="section-header"><h2>根因分析</h2></div>
-    <div class="section-content">
+    <div class="section-header collapsible collapsed"><h2>根因分析</h2></div>
+    <div class="section-content collapse-content hidden">
         {% for cause in root_causes %}
         <div class="cause-card" style="margin-bottom: 16px; padding: 16px; background: var(--bg-white); border-radius: var(--radius-md); border: 1px solid var(--border-color); border-left: 4px solid {% if cause.severity.value == 'critical' %}var(--color-critical){% elif cause.severity.value == 'error' %}var(--color-error){% else %}var(--color-warning){% endif %};">
             <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;">
@@ -166,8 +166,8 @@
 </div>
 {% else %}
 <div class="section" id="root-causes">
-    <div class="section-header"><h2>根因分析</h2></div>
-    <div class="section-content">
+    <div class="section-header collapsible collapsed"><h2>根因分析</h2></div>
+    <div class="section-content collapse-content hidden">
         <div class="summary-box success">
             <p>未检测到明显的配置或连通性故障。</p>
         </div>
@@ -177,8 +177,8 @@
 
 {% if business_probes and business_probes|length > 0 %}
 <div class="section" id="probes">
-    <div class="section-header"><h2>探测明细（DNS A + TCP + Traceroute）</h2></div>
-    <div class="section-content">
+    <div class="section-header collapsible collapsed"><h2>探测明细（DNS A + TCP + Traceroute）</h2></div>
+    <div class="section-content collapse-content hidden">
         <table style="width: 100%; border-collapse: collapse; font-size: 0.95em;">
             <thead>
                 <tr style="text-align: left; border-bottom: 1px solid var(--border-color);">
@@ -249,8 +249,8 @@
 {% endif %}
 
 <div class="section" id="topology">
-    <div class="section-header"><h2>网络拓扑结构</h2></div>
-    <div class="section-content">
+    <div class="section-header collapsible collapsed"><h2>网络拓扑结构</h2></div>
+    <div class="section-content collapse-content hidden">
         {% set _lod_ph = topology.layout_overlay_placeholder | default('', true) if topology else '' %}
         {% set _topo_uncertain = ((_lod_ph | string | trim) | length > 0) %}
         <div id="topology-container" class="topology-strip-wrap topology-ref-stage">
@@ -332,8 +332,8 @@
 {% if topology and topology.commercial_delivery is defined and topology.commercial_delivery %}
 {% set cd = topology.commercial_delivery %}
 <div class="section" id="delivery">
-    <div class="section-header"><h2>交付摘要（阅读层）</h2></div>
-    <div class="section-content">
+    <div class="section-header collapsible collapsed"><h2>交付摘要（阅读层）</h2></div>
+    <div class="section-content collapse-content hidden">
         <div class="info-box info" style="margin-bottom: 14px;">
             <div class="info-box-title">主叙述</div>
             <div class="info-box-content">

@@ -28,6 +28,7 @@ _PAIR_RE = re.compile(
     rf"\bsrc={_IPV4}\s+dst={_IPV4}\b",
     re.IGNORECASE,
 )
+_DPORT_RE = re.compile(r"\bdport=(\d+)\b", re.IGNORECASE)
 
 
 @dataclass(slots=True)
@@ -54,6 +55,30 @@ class SessionPathEvidence:
     rule_branch: str
     sample_lines: List[str] = field(default_factory=list)
     summary: str = ""
+
+
+def _declared_ports_from_probes(data: dict) -> Set[int]:
+    ports: Set[int] = set()
+    for row in data.get("business_probes") or []:
+        if not isinstance(row, dict):
+            continue
+        p = row.get("port")
+        if isinstance(p, int) and 1 <= p <= 65535:
+            ports.add(p)
+    return ports
+
+
+def _dport_matches_declared_port(line: str, data: dict) -> bool:
+    declared = _declared_ports_from_probes(data)
+    if not declared:
+        return True
+    m = _DPORT_RE.search(line)
+    if not m:
+        return True
+    try:
+        return int(m.group(1)) in declared
+    except ValueError:
+        return True
 
 
 def vxlan_logical_iface_ipv4_set(cpe: Optional[CpeConfiguration]) -> Set[str]:
@@ -128,13 +153,17 @@ def evaluate_session_path_evidence(
     cpe: Optional[CpeConfiguration],
     pc_ip: Optional[str],
 ) -> SessionPathEvidence:
-    """评估 L1：双向 conntrack 行 + 整段 blob 隧道 DIP 兜底。"""
+    """评估 L1：优先 conntrack diff delta 行，否则 post blob 全量解析。"""
+    from sdwan_desktop.services.diagnosis.raisecom_msg5200b_conntrack_diff import (
+        evaluate_conntrack_diff_evidence,
+    )
+
+    diff_ev = evaluate_conntrack_diff_evidence(targeted_data, cpe, pc_ip)
     blob = _nf_conntrack_blob_for_biz_targets(targeted_data)
     biz_targets = set(_biz_target_ips_from_targeted_data(targeted_data))
     tunnel_set = tunnel_peer_and_overlay_address_set(cpe) if cpe else set()
     vxlan_ips = vxlan_logical_iface_ipv4_set(cpe)
     policy_ok = pc_matches_sdwan_policy_source_prefix(pc_ip, cpe) if cpe else False
-    # 无策略配置时 policy_ok 恒为 False，仍允许「全 DIP 隧道」兜底（与原 D2 单测一致）
     policy_mismatch = not policy_ok
 
     lines = [ln.strip() for ln in (blob or "").splitlines() if ln.strip()]
@@ -142,7 +171,10 @@ def evaluate_session_path_evidence(
     line_hits = 0
     pc_src_seen = False
 
-    for ln in lines:
+    diff_lines = diff_ev.delta_lines if diff_ev.used_diff else []
+    scan_lines = diff_lines if diff_lines else lines
+
+    for ln in scan_lines:
         tup = parse_conntrack_line_bidirectional(ln)
         if tup is None:
             continue
@@ -153,11 +185,28 @@ def evaluate_session_path_evidence(
             if len(sample_lines) < 3:
                 sample_lines.append(ln)
 
+    if diff_ev.used_diff and diff_ev.sip_mismatch_relaxed and line_hits == 0:
+        for ln in diff_ev.delta_lines:
+            tup = parse_conntrack_line_bidirectional(ln)
+            if tup is None or tup.forward_dst not in biz_targets:
+                continue
+            if not _dport_matches_declared_port(ln, targeted_data):
+                continue
+            line_hits += 1
+            if len(sample_lines) < 3:
+                sample_lines.append(ln)
+            break
+
     dips = conntrack_destination_ipv4s_from_blob(blob)
     blob_tunnel = bool(dips) and all(d in tunnel_set for d in dips)
     overlay = line_hits > 0 or (policy_mismatch and blob_tunnel)
 
-    if line_hits > 0:
+    if line_hits > 0 and diff_ev.used_diff and diff_ev.sip_mismatch_relaxed:
+        branch = "conntrack_diff_delta"
+        summary = diff_ev.summary or (
+            f"L1：diff 命中 {line_hits} 条会话行（SIP 放宽）。"
+        )
+    elif line_hits > 0:
         branch = "conntrack_bidirectional_vxlan"
         summary = (
             f"L1：{line_hits} 条会话行满足「正向 dst∈业务目标且回程经 vxlan/隧道端点」。"
@@ -170,14 +219,15 @@ def evaluate_session_path_evidence(
         summary = "L1：未见单行双向 overlay 旁证。"
 
     logger.debug(
-        "session_path: lines=%d line_hits=%d blob_tunnel=%s branch=%s",
+        "session_path: lines=%d line_hits=%d blob_tunnel=%s branch=%s diff=%s",
         len(lines),
         line_hits,
         blob_tunnel,
         branch,
+        diff_ev.used_diff,
     )
     return SessionPathEvidence(
-        has_sampling=bool(lines),
+        has_sampling=bool(lines) or diff_ev.has_post,
         overlay_path_confirmed=overlay,
         line_confirmed_count=line_hits,
         blob_all_dips_tunnel=blob_tunnel,

@@ -19,6 +19,11 @@ from sdwan_desktop.services.diagnosis.business_rca_engine import (
     build_observation_for_analysis,
     build_probe_bundle_from_targeted,
 )
+from sdwan_desktop.services.analyzer.heuristic_cause_consolidation import (
+    build_heuristic_consolidation_context,
+    consolidate_heuristic_root_causes,
+)
+from sdwan_desktop.services.diagnosis.cpe_nat_heuristic import cpe_nat_inside_heuristic_applicable
 from sdwan_desktop.services.reporter.joint_commercial_delivery import (
     joint_datapath_evidence_from_targeted_probe,
     path_beyond_tunnel_likely,
@@ -112,8 +117,10 @@ class RootCauseEngine:
 
         session_evidence = self._conntrack_evidence_from_probe(targeted_probe)
 
-        # 3. 检查 NAT 穿透 (CPE-004)
-        nat_causes = self.nat_detector.detect_nat_mismatch(topology, cpe_config, pc_data)
+        # 3. 检查 NAT 穿透 (CPE-004)；Overlay/隧道面业务默认不要求 PC 网段编入 NAT inside
+        nat_causes = self.nat_detector.detect_nat_mismatch(
+            topology, cpe_config, pc_data, targeted_probe=targeted_probe
+        )
         causes.extend(nat_causes)
 
         # 4. 检查策略路由 (CPE-003)
@@ -128,9 +135,26 @@ class RootCauseEngine:
         )
         self._apply_session_evidence(causes, session_evidence)
         self._apply_trace_evidence(causes, targeted_probe, cpe_config, topology)
-        self._reconcile_policy_nat_with_tunnel_datapath(causes, targeted_probe)
-        self._reconcile_causes_when_targeted_business_ok(targeted_probe, causes)
+        self._downgrade_config_heuristic_severity(causes, targeted_probe)
         apply_overlay_policy_flow_to_causes(causes, overlay_policy_flow)
+        self._drop_cpe004_when_overlay_nat_not_expected(
+            causes, cpe_config, targeted_probe, topology
+        )
+        hctx = build_heuristic_consolidation_context(
+            causes,
+            targeted_probe=targeted_probe,
+            overlay_policy_flow=overlay_policy_flow,
+            session_evidence=session_evidence,
+            business_probes_all_ok=self._targeted_business_probes_all_ok(targeted_probe),
+        )
+        consolidated = consolidate_heuristic_root_causes(
+            causes,
+            hctx,
+            targeted_probe=targeted_probe,
+            topology_pc_node_id=topology.pc_node_id or "",
+            topology_cpe_node_id=topology.cpe_node_id or "",
+        )
+        causes[:] = consolidated
 
         sort_root_causes_for_display(causes)
         logger.info(f"根因分析完成，共识别出 {len(causes)} 个潜在问题")
@@ -210,34 +234,6 @@ class RootCauseEngine:
         only_syn_or_unreplied = bool(session.get("has_only_syn_or_unreplied"))
         closing_residual = bool(session.get("has_closing_residual_pattern"))
         for cause in causes:
-            if cause.cause_id in ("CPE-003", "CPE-004"):
-                if has_progress:
-                    cause.confidence = min(cause.confidence, 0.62)
-                    cause.description += (
-                        f" 会话证据：目标IP({ips})命中 {line_count} 条，状态[{state_text}]，"
-                        "存在已建立/可推进会话，需谨慎判断为本地策略或NAT根因。"
-                    )
-                elif line_count == 0:
-                    # 零命中不能反推 NAT/策略：grep 按业务目的 IP；PC→上游 NAT→CPE 时 CPE 上常见不到 PC 私网源。
-                    cause.confidence = min(cause.confidence, 0.66)
-                    cause.description += (
-                        f" 会话证据：按业务目的地址 grep 的 nf_conntrack 在采样窗口内对 {ips} 零命中。"
-                        " 这**不能**证明「NAT 不匹配」或「策略必未命中」：可能为会话过期/探测时机不同步，"
-                        "或路径经上游 NAT 后 CPE 观察面与 PC 快照源不一致。"
-                    )
-                elif closing_residual:
-                    cause.confidence = min(cause.confidence, 0.64)
-                    cause.description += (
-                        f" 会话证据：目标IP({ips})命中 {line_count} 条，状态[{state_text}]；"
-                        "主要为收尾态（如 TIME_WAIT），常见于探测会话刚结束后的残留，"
-                        "不宜单独作为业务失败或对端不响应的强证据。"
-                    )
-                elif only_syn_or_unreplied:
-                    cause.confidence = min(cause.confidence, 0.70)
-                    cause.description += (
-                        f" 会话证据：目标IP({ips})命中 {line_count} 条，状态[{state_text}]，"
-                        "未见明确已建立会话，更偏向上游/远端不响应或中间路径黑洞。"
-                    )
             if cause.cause_id.startswith("BIZ-TCP"):
                 if line_count == 0:
                     cause.confidence = min(max(cause.confidence, 0.55), 0.72)
@@ -327,34 +323,27 @@ class RootCauseEngine:
                     return False
         return bool(rows)
 
-    def _reconcile_causes_when_targeted_business_ok(
-        self, targeted_probe: Optional[Dict[str, Any]], causes: List[RootCause]
+    def _downgrade_config_heuristic_severity(
+        self, causes: List[RootCause], targeted_probe: Optional[Dict[str, Any]]
     ) -> None:
-        """拓扑后业务探测已全部成功时，下调配置启发式严重度并补充与观测一致的说明。"""
-        if not self._targeted_business_probes_all_ok(targeted_probe):
-            return
-        policy_note = (
-            "【与本机/拓扑后探测一致】声明目标在业务探测行中已达通；此处「策略未命中」来自 **PC 快照主地址** "
-            "与 CPE ``sdwan_policies.source`` 的**启发式前缀比对**，不等价于转发面抓包结论（可能走默认路由、"
-            "其它源 NAT、或策略以网段表述与快照主地址不一致）。请用 conntrack 源 IP 与策略表人工复核。"
+        """下调配置启发式严重度；叙述由 ``consolidate_heuristic_root_causes`` 统一生成。"""
+        from sdwan_desktop.services.analyzer.heuristic_cause_consolidation import (
+            CONFIG_HEURISTIC_SOURCE_IDS,
         )
-        nat_note = (
-            "【与本机/拓扑后探测一致】声明目标已达通；NAT 不一致提示基于快照与配置解析的静态比对，"
-            "请与现网会话记录交叉验证。"
-        )
+
+        ev = joint_datapath_evidence_from_targeted_probe(targeted_probe)
+        biz_ok = self._targeted_business_probes_all_ok(targeted_probe)
         for c in causes:
-            if c.cause_id == "CPE-003" and c.severity in (Severity.ERROR, Severity.WARNING):
-                if c.severity == Severity.ERROR:
-                    c.severity = Severity.WARNING
-                c.title = "PC 与 SD-WAN 策略源前缀未匹配（启发式；业务探测显示目标已达通）"
-                if policy_note not in c.description:
-                    c.description = f"{c.description}\n{policy_note}"
-            elif c.cause_id == "CPE-004" and c.severity in (Severity.ERROR, Severity.WARNING):
-                if c.severity == Severity.ERROR:
-                    c.severity = Severity.WARNING
-                c.title = "PC 网段未覆盖 CPE NAT inside（启发式；业务探测显示目标已达通）"
-                if nat_note not in c.description:
-                    c.description = f"{c.description}\n{nat_note}"
+            if (c.cause_id or "") not in CONFIG_HEURISTIC_SOURCE_IDS:
+                continue
+            if c.severity == Severity.ERROR:
+                c.severity = Severity.WARNING
+            if biz_ok:
+                c.confidence = min(float(c.confidence or 0.8), 0.58)
+            elif ev is not None and path_beyond_tunnel_likely(ev):
+                c.confidence = min(float(c.confidence or 0.8), 0.62)
+            elif ev is not None and ev.tunnel_peers_all_icmp_ok and ev.conntrack_line_count > 0:
+                c.confidence = min(float(c.confidence or 0.8), 0.65)
 
     def _business_causes_from_probe(
         self,
@@ -406,55 +395,27 @@ class RootCauseEngine:
             )
         ]
 
-    def _reconcile_policy_nat_with_tunnel_datapath(
-        self, causes: List[RootCause], targeted_probe: Optional[Dict[str, Any]]
+    def _drop_cpe004_when_overlay_nat_not_expected(
+        self,
+        causes: List[RootCause],
+        cpe_config: CpeConfiguration,
+        targeted_probe: Optional[Dict[str, Any]],
+        topology: NetworkTopology,
     ) -> None:
-        """隧道 ICMP 与 conntrack 形态与「策略/NAT 启发式」对齐，避免与拓扑隧道叙述矛盾。"""
-        ev = joint_datapath_evidence_from_targeted_probe(targeted_probe)
-        if ev is None:
+        """Overlay/隧道面声明业务不产生 CPE-004（与 ``NatDetector`` 门控一致）。"""
+        if not causes:
             return
-        # CPE-003 与 CPE-004 须分述：后者与 sdwan_policies 无关，避免在 NAT 卡片上误贴策略源话术。
-        note_pbt_policy = (
-            "【与隧道/会话观测对齐】隧道对端 ICMP 全通，且 nf_conntrack 对业务目的地址呈 SYN/UNREPLIED（未见 ESTABLISHED），"
-            "更符合**对端以远或目的路径**类问题；此处「PC 与 sdwan_policies.source 前缀不一致」为**配置面对账启发式**，"
-            "**不应**解读为整条策略路由/fwmark 选路或隧道转发面失效。"
-        )
-        note_pbt_nat = (
-            "【与隧道/会话观测对齐】隧道对端 ICMP 全通，且 nf_conntrack 对业务目的地址呈 SYN/UNREPLIED（未见 ESTABLISHED），"
-            "更符合**对端以远或目的路径**类问题；此处「PC 网段未编入 CPE NAT inside」为**配置面对账启发式**，"
-            "**不应**解读为 CPE 未转发或未走隧道/Overlay 面。"
-        )
-        note_ct = (
-            "【与隧道/会话观测对齐】隧道对端 ICMP 全通，且 CPE 上已采集到发往业务目的地址的 conntrack 行，"
-            "说明业务报文已进入本机 netfilter 观测面；「策略源未命中」**不能**单独否定实际选路已走隧道/Overlay。"
-        )
-        title_cpe003_pbt = "PC 与 SD-WAN 策略源前缀未匹配（启发式；隧道/会话支持对侧路径）"
-        title_cpe004_pbt = "PC 网段未覆盖 CPE NAT inside（启发式；隧道/会话支持对侧路径）"
-        title_cpe003_ct = "PC 与 SD-WAN 策略源前缀未匹配（启发式；CPE 已有目的地址会话）"
-
-        if path_beyond_tunnel_likely(ev):
-            for c in causes:
-                if c.cause_id not in ("CPE-003", "CPE-004"):
-                    continue
-                if c.severity not in (Severity.ERROR, Severity.WARNING):
-                    continue
-                c.severity = Severity.WARNING
-                if c.cause_id == "CPE-003":
-                    note = note_pbt_policy
-                    c.title = title_cpe003_pbt
-                else:
-                    note = note_pbt_nat
-                    c.title = title_cpe004_pbt
-                if note not in c.description:
-                    c.description = f"{c.description}\n{note}"
-        elif ev.tunnel_peers_all_icmp_ok and ev.conntrack_line_count > 0:
-            for c in causes:
-                if c.cause_id != "CPE-003" or c.severity not in (Severity.ERROR, Severity.WARNING):
-                    continue
-                c.severity = Severity.WARNING
-                c.title = title_cpe003_ct
-                if note_ct not in c.description:
-                    c.description = f"{c.description}\n{note_ct}"
+        topology_dict = topology.to_dict() if hasattr(topology, "to_dict") else None
+        if cpe_nat_inside_heuristic_applicable(
+            cpe_config=cpe_config,
+            targeted_probe=targeted_probe,
+            topology_dict=topology_dict,
+        ):
+            return
+        before = len(causes)
+        causes[:] = [c for c in causes if c.cause_id != "CPE-004"]
+        if len(causes) < before:
+            logger.info("已移除 %d 条 CPE-004：声明业务经 Overlay，不适用 CPE NAT inside 启发式", before - len(causes))
 
     def _create_cpe_unreachable(self, cpe_result: CollectorResult) -> RootCause:
         """创建 CPE 不可达根因 (CPE-001)"""
@@ -535,7 +496,11 @@ def apply_overlay_policy_flow_to_causes(
     causes: List[RootCause],
     overlay_policy_flow: Optional[Dict[str, Any]],
 ) -> None:
-    """在已生成 Overlay/策略证据链后：弱化与其明显矛盾的 CPE-003/CPE-004（ERROR 或 WARNING）。"""
+    """Overlay 证据链就绪后下调配置启发式严重度（叙述由综合模块统一输出）。"""
+    from sdwan_desktop.services.analyzer.heuristic_cause_consolidation import (
+        CONFIG_HEURISTIC_SOURCE_IDS,
+    )
+
     if not causes or not isinstance(overlay_policy_flow, dict):
         return
     if overlay_policy_flow.get("status") not in ("ok", "partial"):
@@ -550,23 +515,9 @@ def apply_overlay_policy_flow_to_causes(
         return
     if not any(k in blob for k in ("fwmark", "ip rule", "mangle", "ipset", "vxlan", "l2tp", "ipsec")):
         return
-    note = (
-        "【与 Overlay/策略证据链对齐】报告已归纳 vxlan/隧道面及典型 MARK→ip rule→多路由表 等组件；"
-        "「PC primary 未编入 sdwan_policies / NAT inside」仅为与**快照主地址**的静态比对，"
-        "必须与 conntrack 源、上游 NAT 及业务接口交叉验证，**不得**单独等同于策略路由未生效。"
-    )
-    title_cpe003_ov = "PC 与 SD-WAN 策略源前缀未匹配（启发式；Overlay/策略证据链已对账）"
-    title_cpe004_ov = "PC 网段未覆盖 CPE NAT inside（启发式；Overlay/策略证据链已对账）"
     for c in causes:
-        if c.cause_id not in ("CPE-003", "CPE-004") or c.severity not in (
-            Severity.ERROR,
-            Severity.WARNING,
-        ):
+        if (c.cause_id or "") not in CONFIG_HEURISTIC_SOURCE_IDS:
             continue
-        c.severity = Severity.WARNING
-        if c.cause_id == "CPE-003":
-            c.title = title_cpe003_ov
-        else:
-            c.title = title_cpe004_ov
-        if note not in c.description:
-            c.description = f"{c.description}\n{note}"
+        if c.severity == Severity.ERROR:
+            c.severity = Severity.WARNING
+        c.confidence = min(float(c.confidence or 0.8), 0.65)

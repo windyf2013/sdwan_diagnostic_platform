@@ -119,6 +119,15 @@ class TestCpeCollectorDiagnosticShellPrompt:
         assert col._diagnostic_shell_prompt_seen("Password:\r\n\r\n# ")
         assert col._diagnostic_shell_prompt_seen("x\n#")
 
+    def test_diagnostic_shell_prompt_seen_root_at_host(self) -> None:
+        """5200D x86 su 后常见 root@host:/#。"""
+        col = CpeCollector(
+            CpeCollectorConfig(host="1.1.1.1", username="u", password="p", protocol="telnet")
+        )
+        assert col._diagnostic_shell_prompt_seen(
+            "Linux host 5.10.70 x86_64\nroot@host:/# "
+        )
+
     def test_diagnostic_shell_prompt_not_host_cli(self) -> None:
         col = CpeCollector(
             CpeCollectorConfig(host="1.1.1.1", username="u", password="p", protocol="telnet")
@@ -338,7 +347,7 @@ class TestCpeCollectorCommandExecution:
     @pytest.mark.asyncio
     async def test_execute_command_no_connection(self, collector):
         """测试无连接时执行命令"""
-        with pytest.raises(ConnectionError, match="未建立连接"):
+        with pytest.raises(ConnectionError, match="未建立"):
             await collector._execute_command("show version")
     
     @pytest.mark.asyncio
@@ -369,7 +378,7 @@ class TestCpeCollectorCommandTemplate:
         commands = collector._load_command_template("unknown_vendor")
         
         assert len(commands) > 0
-        assert any(cmd["name"] == "show version" for cmd in commands)
+        assert any(cmd["name"] == "show version all" for cmd in commands)
 
 
 class TestCpeCollectorExecuteCommands:
@@ -441,15 +450,17 @@ class TestCpeCollectorFullCollection:
         collector.validate = AsyncMock(return_value=True)
         collector._connect = AsyncMock()
         collector._detect_device_type = AsyncMock(return_value="cisco_sdwan")
-        collector._execute_commands = AsyncMock()
+        async def _mock_execute(_cmds: list) -> None:
+            collector._raw_outputs.update(
+                {
+                    "show version": "Viptela VEDGE-1000 Software (vedge)\nVersion 20.9.3",
+                    "show interface": "",
+                    "show ip route": "",
+                }
+            )
+
+        collector._execute_commands = AsyncMock(side_effect=_mock_execute)
         collector._disconnect = AsyncMock()
-        
-        # Mock 原始输出
-        collector._raw_outputs = {
-            "show version": "Viptela VEDGE-1000 Software (vedge)\nVersion 20.9.3",
-            "show interface": "",
-            "show ip route": "",
-        }
         
         result = await collector.collect(ctx)
         

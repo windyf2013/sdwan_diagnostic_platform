@@ -44,14 +44,24 @@ def finalize_diagnosis_form(form_inner: QVBoxLayout) -> None:
     form_inner.addStretch(1)
 
 
+def configure_status_bar_label(label: QLabel) -> None:
+    """主窗口底栏状态：单行省略，不把取消/进度条挤出可视区。"""
+    label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+    label.setMinimumWidth(0)
+    label.setFixedHeight(22)
+    label.setWordWrap(False)
+
+
 def diagnosis_tab_layout(
     host: QWidget,
     scope_text: str,
-) -> tuple[QVBoxLayout, QVBoxLayout, QLabel]:
-    """构建诊断页：说明 + 可滚动表单 + 底栏状态。
+    *,
+    include_tab_status: bool = True,
+) -> tuple[QVBoxLayout, QVBoxLayout, QLabel | None]:
+    """构建诊断页：说明 + 可滚动表单；可选 Tab 内底栏状态。
 
     Returns:
-        ``(root, form_inner, status_label)``
+        ``(root, form_inner, status_label)`` — ``status_label`` 为 ``None`` 时不建 Tab 底栏。
     """
     root = QVBoxLayout(host)
     root.setContentsMargins(8, 6, 8, 6)
@@ -76,10 +86,12 @@ def diagnosis_tab_layout(
     scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
     root.addWidget(scroll, 1)
 
-    status = QLabel("就绪")
-    status.setFixedHeight(22)
-    status.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
-    status.setWordWrap(False)
+    status: QLabel | None = None
+    if include_tab_status:
+        status = QLabel("就绪")
+        status.setFixedHeight(22)
+        status.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        status.setWordWrap(False)
 
     return root, form_inner, status
 

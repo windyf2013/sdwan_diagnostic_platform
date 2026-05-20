@@ -5,9 +5,10 @@ NAT 穿透检测辅助逻辑
 """
 
 import logging
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from sdwan_desktop.core.types.cpe_config import CpeConfiguration, NatRuleInfo
+from sdwan_desktop.services.diagnosis.cpe_nat_heuristic import cpe_nat_inside_heuristic_applicable
 from sdwan_desktop.core.types.diagnosis import RootCause, Severity
 from sdwan_desktop.services.topology.topology import NetworkTopology
 
@@ -22,6 +23,8 @@ class NatDetector:
         topology: NetworkTopology,
         cpe_config: CpeConfiguration,
         pc_data: dict,
+        *,
+        targeted_probe: Optional[Dict[str, Any]] = None,
     ) -> List[RootCause]:
         """检测 NAT 不匹配问题 (CPE-004)
 
@@ -29,13 +32,22 @@ class NatDetector:
             topology: 网络拓扑
             cpe_config: CPE 配置对象
             pc_data: PC 端采集数据
+            targeted_probe: 拓扑后信封（含 ``business_probes`` 时用于区分 Overlay vs Internet）
 
         Returns:
             识别出的根因列表
         """
         causes = []
         pc_ip = pc_data.get("primary_ip")
-        
+
+        topology_dict = topology.to_dict() if hasattr(topology, "to_dict") else None
+        if not cpe_nat_inside_heuristic_applicable(
+            cpe_config=cpe_config,
+            targeted_probe=targeted_probe,
+            topology_dict=topology_dict,
+        ):
+            return causes
+
         if not pc_ip or not cpe_config.nat_rules:
             return causes
 

@@ -8,8 +8,14 @@ from typing import Any, Dict, List, Optional, Tuple
 from sdwan_desktop.core.types.context import FlowContext
 from sdwan_desktop.core.types.diagnosis import RootCause
 from sdwan_desktop.services.analyzer.root_cause import RootCauseEngine
+from sdwan_desktop.services.collector.base import CollectorResult
 from sdwan_desktop.services.collector.cpe_collector import CpeCollector
 from sdwan_desktop.services.diagnosis.business_diagnosis import BusinessDiagnosisOutcome
+from sdwan_desktop.services.diagnosis.raisecom_msg5200b_conntrack_diff import (
+    diff_evidence_to_dict,
+    evaluate_conntrack_diff_evidence,
+)
+from sdwan_desktop.services.diagnosis.raisecom_msg5200b_session import is_raisecom_msg5200b_cpe
 from sdwan_desktop.services.probe.planner import (
     extract_tunnel_peer_ips_from_cpe_configuration,
     plan_post_topology_probe_commands,
@@ -66,6 +72,30 @@ def business_probe_requires_joint_diagnosis(outcome: BusinessDiagnosisOutcome) -
     return False
 
 
+def _merge_probe_raw_outputs(
+    cpe_result: Any,
+    business_outcome: BusinessDiagnosisOutcome,
+) -> Dict[str, str]:
+    """从并行 CPE 采集结果合并 ``raw_outputs`` 供 ``targeted_probe`` 使用。"""
+    raw: Dict[str, str] = {}
+    if cpe_result and cpe_result.success and isinstance(cpe_result.data, dict):
+        ro = cpe_result.data.get("raw_outputs")
+        if isinstance(ro, dict):
+            raw.update({str(k): str(v) for k, v in ro.items()})
+    return raw
+
+
+def _attach_conntrack_diff(
+    data: Dict[str, Any],
+    cpe_configuration: Any,
+    pc_ip: Optional[str],
+) -> None:
+    if not is_raisecom_msg5200b_cpe(cpe_configuration):
+        return
+    diff_ev = evaluate_conntrack_diff_evidence(data, cpe_configuration, pc_ip)
+    data["conntrack_diff"] = diff_evidence_to_dict(diff_ev)
+
+
 async def run_joint_root_cause_after_business_probe(
     ctx: FlowContext,
     pc_snapshot: Any,
@@ -74,15 +104,20 @@ async def run_joint_root_cause_after_business_probe(
     cpe_collector: CpeCollector,
     topology_builder: TopologyBuilder,
     cpe_mgmt_ip: str,
+    cpe_result: Optional[CollectorResult] = None,
 ) -> Tuple[NetworkTopology, Any, Dict[str, Any], List[RootCause]]:
     """在已有 PC 快照与 ``business_probes`` 行上，执行 CPE 采集、拓扑后探测与根因引擎。
 
-    不重跑 PC 侧 DNS/TCP，将首次探测结果并入 ``targeted_probe`` 信封供 ``RootCauseEngine`` 消费。
+    若 ``cpe_result`` 已由并行 CPE Task 写入 ``ctx``，则不再 ``collect()``。
     """
-    if not await cpe_collector.validate(ctx):
-        raise RuntimeError("CPE 连接校验失败")
+    if cpe_result is None:
+        cpe_result = ctx.get("cpe_result")
 
-    cpe_result = await cpe_collector.collect(ctx)
+    if cpe_result is None:
+        if not await cpe_collector.validate(ctx):
+            raise RuntimeError("CPE 连接校验失败")
+        cpe_result = await cpe_collector.collect(ctx)
+
     pc_data_dict = snapshot_to_topology_input(pc_snapshot)
     topology = topology_builder.build(pc_data_dict, cpe_result, cpe_mgmt_ip=str(cpe_mgmt_ip))
 
@@ -98,6 +133,10 @@ async def run_joint_root_cause_after_business_probe(
     biz_target_ips = _extract_probe_target_ips(list(business_outcome.business_probes))
     if biz_target_ips:
         data["biz_target_ips"] = biz_target_ips
+
+    raw_merged = _merge_probe_raw_outputs(cpe_result, business_outcome)
+    data["raw_outputs"] = raw_merged
+
     cfg = (
         cpe_result.data.get("cpe_configuration")
         if cpe_result and cpe_result.success and isinstance(cpe_result.data, dict)
@@ -106,17 +145,20 @@ async def run_joint_root_cause_after_business_probe(
     tunnel_peer_ips = extract_tunnel_peer_ips_from_cpe_configuration(cfg)
     if tunnel_peer_ips:
         data["tunnel_peer_ips"] = tunnel_peer_ips
+
+    skip_keys = set(raw_merged.keys())
     cmds = plan_post_topology_probe_commands(
         str(dt),
         biz_target_ips=biz_target_ips,
         tunnel_peer_ips=tunnel_peer_ips or None,
         include_tunnel_peer_probes=False,
+        skip_keys=skip_keys,
     )
     if cpe_result and cpe_result.success and cmds:
         try:
             pr = await cpe_collector.run_probe_commands(ctx, cmds)
-            raw = dict((pr.data or {}).get("raw_outputs") or {})
-            data["raw_outputs"] = raw
+            raw_merged.update(dict((pr.data or {}).get("raw_outputs") or {}))
+            data["raw_outputs"] = raw_merged
             if isinstance(pr.data, dict) and pr.data.get("device_type"):
                 data["device_type"] = pr.data.get("device_type")
             if not pr.success:
@@ -124,10 +166,16 @@ async def run_joint_root_cause_after_business_probe(
         except Exception as exc:
             logger.warning("CPE 拓扑后探测异常: %s", exc, exc_info=True)
             cpe_error = str(exc)
-            data.setdefault("raw_outputs", {})
-    elif cpe_result and cpe_result.success and not cmds:
+    elif cpe_result and cpe_result.success and not raw_merged and not cmds:
         data["reason"] = "no_probe_for_device_type"
-        data.setdefault("raw_outputs", {})
+
+    if not cpe_result.success:
+        cpe_error = cpe_result.error_message or "CPE 采集失败"
+
+    pc_ip = None
+    if isinstance(pc_data_dict, dict):
+        pc_ip = pc_data_dict.get("primary_ip") or pc_data_dict.get("ip_address")
+    _attach_conntrack_diff(data, cfg, pc_ip)
 
     err_parts = [x for x in (cpe_error, business_outcome.aggregate_error) if x]
     envelope_error = "; ".join(err_parts) if err_parts else None

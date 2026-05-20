@@ -181,7 +181,7 @@ def build_joint_primary_narrative(
             "但长期处于 SYN 未建立完成状态；更可能发生在隧道对端以远、目的侧或对端路径策略，"
             "而非「隧道完全不通」。"
         )
-        if "CPE-003" in cause_ids or "CPE-004" in cause_ids:
+        if cause_ids & {"CPE-003", "CPE-004", "CPE-CONFIG-HEURISTIC"}:
             # 与 _annotate_problem_nodes / topology presentation 的 suppress_heuristic 同源：
             # 已出站痕迹下，配置类启发式仅作「待核对」，不得提升为「设备未转发该流」。
             bullets.append(

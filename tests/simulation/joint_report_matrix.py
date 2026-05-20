@@ -48,6 +48,10 @@ class JointReportScenario:
     expected_rule_case: str = ""
     expected_show_overlay: bool = False
     expected_evidence_tier: str = "underlay_only"
+    expected_config_intent: str = ""
+    expected_reconcile_outcome: str = ""
+    expected_break_point: str = ""
+    expected_s1_status: str = ""
     tags: tuple[str, ...] = ()
 
 
@@ -119,6 +123,32 @@ def _tp_base(
         },
         "error": None,
     }
+
+
+def _cpe_with_url_group_domain(
+    *,
+    domain: str,
+    group: str = "acceleratePlus",
+    pc_security_ip: str = "192.168.54.17",
+    security_enabled: bool = True,
+    interfaces: Optional[List[InterfaceInfo]] = None,
+    extra_raw: Optional[Dict[str, str]] = None,
+) -> CpeConfiguration:
+    """5200B CPE + url-group running-config / domain / security-ip 原始输出。"""
+    sec_line = " security ip enable\n" if security_enabled else ""
+    cpe = _raisecom_cpe(
+        policies=[SdwanPolicy(name="acc", source="192.168.54.0/24")],
+        interfaces=interfaces,
+    )
+    raw: Dict[str, str] = {
+        "show running-config": f"url-group {group}\n{sec_line} priority 100\nexit\n",
+        "show url-group all security-ip": f"url-group {group}\n{pc_security_ip}\n",
+        "show url-group all domain all": f"url-group {group}\n{domain}\nexit\n",
+    }
+    if extra_raw:
+        raw.update(extra_raw)
+    cpe.raw_outputs = raw
+    return cpe
 
 
 def _raisecom_cpe(
@@ -508,6 +538,131 @@ def all_scenarios() -> List[JointReportScenario]:
             expected_evidence_tier="heuristic",
             tags=("cisco", "generic", "overlay"),
         ),
+        JointReportScenario(
+            scenario_id="12_path_internet_intent",
+            title="路径对账 · 未入 url-group（互联网意图）",
+            description="声明域不在 url-group 列表；config_intent=internet_underlay。",
+            joint_failure_driven=False,
+            domain="plain.example",
+            biz_ip="203.0.113.20",
+            build_targeted_probe=lambda: _tp_base(
+                domain="plain.example",
+                biz_ip="203.0.113.20",
+                conntrack_line=(
+                    "tcp ESTABLISHED src=10.10.25.3 dst=203.0.113.20 sport=1 dport=443"
+                ),
+                extra_raw={
+                    "show url-group all domain all": (
+                        "url-group acceleratePlus\nother.example\nexit\n"
+                    ),
+                },
+            ),
+            build_cpe=lambda: _cpe_with_url_group_domain(
+                domain="other.example",
+                group="acceleratePlus",
+            ),
+            build_topology=lambda: _standard_topology(pc_ip="10.10.100.161"),
+            expected_rule_case="raisecom_underlay_no_overlay_evidence",
+            expected_show_overlay=False,
+            expected_config_intent="internet_underlay",
+            expected_reconcile_outcome="match",
+            tags=("path_matrix", "5200b", "internet"),
+        ),
+        JointReportScenario(
+            scenario_id="13_path_security_miss",
+            title="路径对账 · security-ip 未命中",
+            description="域在 acceleratePlus 但 PC 不在 security-ip → mismatch。",
+            joint_failure_driven=False,
+            domain="biz.example",
+            biz_ip="203.0.113.10",
+            build_targeted_probe=lambda: _tp_base(
+                domain="biz.example",
+                biz_ip="203.0.113.10",
+                conntrack_line=(
+                    "tcp ESTABLISHED src=10.10.25.3 dst=203.0.113.10 sport=1 dport=443"
+                ),
+                extra_raw={
+                    "show url-group all domain all": (
+                        "url-group acceleratePlus\nbiz.example\nexit\n"
+                    ),
+                    "diagnose:ipset --list": "Members:\n203.0.113.10 timeout 0\n",
+                },
+            ),
+            build_cpe=lambda: _cpe_with_url_group_domain(
+                domain="biz.example",
+                pc_security_ip="192.168.54.1",
+            ),
+            build_topology=lambda: _standard_topology(pc_ip="10.0.0.5"),
+            expected_rule_case="raisecom_underlay_no_overlay_evidence",
+            expected_show_overlay=False,
+            expected_config_intent="sdwan_overlay",
+            expected_reconcile_outcome="mismatch",
+            expected_break_point="source_not_in_url_group_security_ip",
+            tags=("path_matrix", "5200b", "security"),
+        ),
+        JointReportScenario(
+            scenario_id="14_path_link_protect_down",
+            title="路径对账 · link-protect / vxlan down",
+            description="SD-WAN 意图但保护组动作口 down → overlay_iface 断点。",
+            joint_failure_driven=False,
+            domain="biz.example",
+            biz_ip="203.0.113.11",
+            build_targeted_probe=lambda: _tp_base(
+                domain="biz.example",
+                biz_ip="203.0.113.11",
+                conntrack_line="",
+                extra_raw={
+                    "show url-group all domain all": (
+                        "url-group acceleratePlus\nbiz.example\nexit\n"
+                    ),
+                    "diagnose:ipset --list": "Members:\n203.0.113.11\n",
+                    "show link-protect status": (
+                        "protect group vxlan2500133 :\n"
+                        "  current action link   : vxlan2500133\n"
+                        "  current action status : down\n"
+                    ),
+                },
+            ),
+            build_cpe=lambda: _cpe_with_url_group_domain(
+                domain="biz.example",
+                interfaces=[
+                    InterfaceInfo(name="vxlan2500133", status="down"),
+                    InterfaceInfo(name="ge1", ip_address="192.168.20.20", status="up"),
+                ],
+            ),
+            build_topology=lambda: _standard_topology(pc_ip="192.168.54.17"),
+            expected_rule_case="raisecom_no_conntrack_sampling",
+            expected_show_overlay=False,
+            expected_config_intent="sdwan_overlay",
+            expected_reconcile_outcome="mismatch",
+            expected_break_point="overlay_iface_down_link_protect",
+            tags=("path_matrix", "5200b", "l4"),
+        ),
+        JointReportScenario(
+            scenario_id="15_path_s1_no_ct_sampling",
+            title="可达性 S1 · 无 conntrack 采样",
+            description="本机探测 OK 但无 ct → S1=no_conntrack_sampling。",
+            joint_failure_driven=False,
+            domain="svc.example",
+            biz_ip="203.0.113.55",
+            build_targeted_probe=lambda: _tp_base(
+                domain="svc.example",
+                biz_ip="203.0.113.55",
+                conntrack_line="",
+                extra_raw={
+                    "show url-group all domain all": (
+                        "url-group acceleratePlus\nsvc.example\nexit\n"
+                    ),
+                },
+            ),
+            build_cpe=lambda: _cpe_with_url_group_domain(domain="svc.example"),
+            build_topology=lambda: _standard_topology(pc_ip="192.168.54.17"),
+            expected_rule_case="raisecom_no_conntrack_sampling",
+            expected_show_overlay=False,
+            expected_config_intent="sdwan_overlay",
+            expected_s1_status="no_conntrack_sampling",
+            tags=("path_matrix", "5200b", "s1"),
+        ),
     ]
 
 
@@ -520,7 +675,57 @@ class GeneratedScenarioReport:
     show_overlay: bool
     suppress_overlay: bool
     banner_snippet: str
+    path_config_intent: str = ""
+    path_reconcile_outcome: str = ""
+    path_break_point: str = ""
     checks: Dict[str, bool] = field(default_factory=dict)
+
+
+def _path_matrix_checks(
+    scenario: JointReportScenario,
+    targeted_probe: dict,
+    cpe: CpeConfiguration,
+    topology: NetworkTopology,
+) -> tuple[Dict[str, bool], str, str, str]:
+    """Phase E：声明路径对账契约校验（仅 ``path_matrix`` 场景）。"""
+    if "path_matrix" not in scenario.tags:
+        return {}, "", "", ""
+    from sdwan_desktop.services.diagnosis.raisecom_msg5200b_declared_path_analysis import (
+        analyze_raisecom_msg5200b_declared_business_path,
+    )
+
+    topo_dict = topology.to_dict()
+    topo_dict.setdefault("pc_node_id", "pc-1")
+    analysis = analyze_raisecom_msg5200b_declared_business_path(
+        targeted_probe, cpe, topo_dict
+    )
+    checks: Dict[str, bool] = {
+        "path_analysis_ok": analysis.status == "ok",
+        "path_block_expected": True,
+    }
+    if scenario.expected_config_intent:
+        checks["path_config_intent"] = (
+            analysis.config_intent == scenario.expected_config_intent
+        )
+    if scenario.expected_reconcile_outcome:
+        checks["path_reconcile_outcome"] = (
+            analysis.reconcile.outcome == scenario.expected_reconcile_outcome
+        )
+    if scenario.expected_break_point:
+        checks["path_break_point"] = (
+            analysis.reconcile.break_point == scenario.expected_break_point
+        )
+    if scenario.expected_s1_status:
+        checks["path_s1_status"] = (
+            analysis.reachability.s1_status == scenario.expected_s1_status
+        )
+    bp = analysis.reconcile.break_point or ""
+    return (
+        checks,
+        analysis.config_intent,
+        analysis.reconcile.outcome,
+        bp,
+    )
 
 
 def generate_scenario_html(
@@ -568,14 +773,25 @@ def generate_scenario_html(
     html_text = out_path.read_text(encoding="utf-8", errors="replace")
     has_overlay_flow = 'class="topology-flow topology-flow-overlay"' in html_text
 
+    path_checks, path_intent, path_outcome, path_bp = _path_matrix_checks(
+        scenario, tp, cpe, topology
+    )
     checks = {
         "rule_case": gate.rule_case == scenario.expected_rule_case,
         "evidence_tier": gate.evidence_tier == scenario.expected_evidence_tier,
         "show_overlay": gate.show_overlay_tunnel_strip == scenario.expected_show_overlay,
         "html_exists": out_path.is_file() and out_path.stat().st_size > 5000,
-        "banner_present": "路径实证" in html_text or "declared_business" in html_text.lower(),
+        "banner_present": (
+            "report-joint-path-line" in html_text
+            or "路径旁证（" in html_text
+            or "路径结论:" in html_text
+        ),
         "path_evidence_block": ("5200b" not in scenario.tags)
-        or ("路径旁证（L1 会话" in html_text),
+        or ("路径旁证（" in html_text),
+        "path_analysis_html": ("path_matrix" not in scenario.tags)
+        or ("声明业务路径（" in html_text),
+        "path_evidence_l5_or_reach": ("path_matrix" not in scenario.tags)
+        or ("路径旁证（" in html_text),
         "tier_label_ok": (
             (scenario.expected_evidence_tier != "heuristic")
             or ("启发式" in gate.datapath_banner)
@@ -591,6 +807,7 @@ def generate_scenario_html(
         ),
         "overlay_strip_rendered": has_overlay_flow == scenario.expected_show_overlay,
     }
+    checks.update(path_checks)
 
     return GeneratedScenarioReport(
         scenario_id=scenario.scenario_id,
@@ -600,6 +817,9 @@ def generate_scenario_html(
         show_overlay=gate.show_overlay_tunnel_strip,
         suppress_overlay=not gate.show_overlay_tunnel_strip,
         banner_snippet=gate.datapath_banner[:120],
+        path_config_intent=path_intent,
+        path_reconcile_outcome=path_outcome,
+        path_break_point=path_bp,
         checks=checks,
     )
 
@@ -617,6 +837,13 @@ def write_index_html(
         ok = all(r.checks.values())
         status = "PASS" if ok else "FAIL"
         fail_keys = [k for k, v in r.checks.items() if not v]
+        path_col = ""
+        if "path_matrix" in sc.tags:
+            path_col = (
+                f"<code>{r.path_config_intent}</code> / "
+                f"{r.path_reconcile_outcome}"
+                f"{(' / ' + r.path_break_point) if r.path_break_point else ''}"
+            )
         rows.append(
             f"<tr class='{status.lower()}'>"
             f"<td><a href='{r.html_path.name}'>{r.scenario_id}</a></td>"
@@ -625,6 +852,7 @@ def write_index_html(
             f"<td><code>{r.rule_case}</code></td>"
             f"<td>{r.evidence_tier}</td>"
             f"<td>{'是' if r.show_overlay else '否'}</td>"
+            f"<td>{path_col or '—'}</td>"
             f"<td>{status}</td>"
             f"<td>{', '.join(fail_keys) if fail_keys else '—'}</td>"
             f"<td style='font-size:0.85em'>{sc.description}</td>"
@@ -640,17 +868,17 @@ h1 {{ font-size: 1.35rem; }}
 table {{ border-collapse: collapse; width: 100%; background: #fff; box-shadow: 0 1px 3px #0001; }}
 th, td {{ border: 1px solid #e2e8f0; padding: 8px 10px; text-align: left; vertical-align: top; }}
 th {{ background: #1e293b; color: #fff; }}
-tr.pass td:nth-child(7) {{ color: #0d9488; font-weight: 700; }}
-tr.fail td:nth-child(7) {{ color: #c62828; font-weight: 700; }}
+tr.pass td:nth-child(8) {{ color: #0d9488; font-weight: 700; }}
+tr.fail td:nth-child(8) {{ color: #c62828; font-weight: 700; }}
 code {{ font-size: 0.85em; }}
 .meta {{ color: #64748b; margin-bottom: 16px; }}
 </style></head><body>
 <h1>业务联合报告 · 仿真矩阵目视验收</h1>
-<p class="meta">生成时间 {ts} · 目录 <code>{out_dir}</code> · 阶段 B 门控/分层呈现</p>
-<p>验收要点：页首结论简洁；路径实证含【精确定位】/【启发式】；未走隧道时无 Overlay 条带且链路表无 tunnel 行。</p>
+<p class="meta">生成时间 {ts} · 目录 <code>{out_dir}</code> · Phase E 门控 + 声明路径对账矩阵</p>
+<p>验收要点：页首路径实证；5200B 场景含「url-group 与声明业务路径分析」；path_matrix 列校验 intent/reconcile/break_point。</p>
 <table>
 <thead><tr>
-<th>场景 ID</th><th>标题</th><th>模式</th><th>rule_case</th><th>tier</th><th>Overlay</th><th>自动校验</th><th>失败项</th><th>说明</th>
+<th>场景 ID</th><th>标题</th><th>模式</th><th>rule_case</th><th>tier</th><th>Overlay</th><th>路径对账</th><th>自动校验</th><th>失败项</th><th>说明</th>
 </tr></thead>
 <tbody>
 {''.join(rows)}

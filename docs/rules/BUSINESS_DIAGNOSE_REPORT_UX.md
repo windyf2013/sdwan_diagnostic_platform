@@ -9,7 +9,8 @@
 
 | 报告区域 | 简洁（默认可见） | 完整（须保留、可折叠） |
 |----------|------------------|------------------------|
-| **页首结论**（`report_joint_probe_outcome`） | 现象一句；主故障/「探测通过」；**【精确定位】/【启发式】** 前缀的一句路径结论；已排除（弱化，如「未见 Overlay 旁证」） | 逐跳 traceroute 表、完整 conntrack 样例、url-group 全文 → **证据链** 或 `<details>` |
+| **核查结论**（`#report-joint-outcome` + `report_joint_reading_layer`） | 单一区块：**探测通过/未通过** 等事实徽章 + headline；**本机/路径**（有主故障时加一行）；置信度；**禁止**升级/处置建议 | 路径工程 banner、探测逐目标明细、已排除/待核对 → 同区块内 `<details>` |
+| **`report_joint_probe_outcome`** | 仅作数据层；**禁止**再渲染第二块「探测结论」hero | 同上，全部由核查结论区折叠承接 |
 | **商业交付摘要**（`joint_commercial_delivery` T0–T3） | 每档 **一行** 结论 + **一句** 说明 | 消歧列表、多段原始输出 → 证据链对应锚点 |
 | **路径实证**（`datapath_banner` / `topology_joint_presentation`） | **≤2 句** + 层级标签（Underlay / Overlay）；`egress_shape` 分叉一句 | 长列表、重复隧道库存话术 → 证据链 |
 | **拓扑主图** | Underlay 一句 +（门控为真时）Overlay 一句 | 链路一览全表、节点表、路径焦点长文 → 折叠或下部表格 |
@@ -81,8 +82,10 @@
 |------|------|
 | `topology_joint_presentation.py` | 生成 `datapath_banner`、路径焦点、链路表 flags；遵守 §3 |
 | `joint_commercial_delivery.py` | T0–T3 文案与计数；遵守 §4 |
+| `joint_report_reading_layer.py` | 生成 `report_joint_reading_layer`（首屏结论 + 阅读指引 + 根因区导航文案） |
 | `deep_dive_joint_ux.html` / `topology_detail_tables.html` | 页首与折叠结构；禁止 §2.2 |
 | `business_diagnose.py` | 传入 `business_probe_all_ok`、`show_business_flow_overlay` 等呈现字段 |
+| `heuristic_cause_consolidation.py` | business-diagnose：CPE-003/004 等综合为单条 `CPE-CONFIG-HEURISTIC`；页首待核对仅一条 |
 
 **禁止**：在模板 Jinja 中嵌入 5200B 专有判定；仅使用上游已计算的布尔与 tier 字段。
 

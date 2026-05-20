@@ -18,7 +18,7 @@ Raisecom 补充说明（与 ``templates/whole_config_5200b.txt`` 一致）：
   （**不断言** L2TP/IPsec/VXLAN 的线序封装）。
 """
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Set
 
 
 def extract_tunnel_peer_ips_from_cpe_configuration(cpe_configuration: Any) -> List[str]:
@@ -33,19 +33,140 @@ def extract_tunnel_peer_ips_from_cpe_configuration(cpe_configuration: Any) -> Li
     return list(dict.fromkeys(peers))
 
 
-def _build_nf_conntrack_probe_commands(biz_target_ips: List[str]) -> List[Dict[str, Any]]:
+def _dedupe_ips(biz_target_ips: List[str]) -> List[str]:
+    return list(dict.fromkeys(ip for ip in biz_target_ips if ip))
+
+
+def _build_nf_conntrack_probe_commands(
+    biz_target_ips: List[str],
+    *,
+    save_as_prefix: str = "diagnose:nf_conntrack grep",
+) -> List[Dict[str, Any]]:
     """为 Raisecom 生成基于业务目标 IP 的会话表查询命令。"""
     cmds: List[Dict[str, Any]] = []
-    for ip in biz_target_ips:
+    for ip in _dedupe_ips(biz_target_ips):
         cmds.append(
             {
                 "name": f'diagnose:cat /proc/rcios/net/netfilter/nf_conntrack | grep "{ip}"',
-                "priority": 1,
+                "priority": 0,
                 "optional": True,
-                "save_as": f"diagnose:nf_conntrack grep {ip}",
+                "save_as": f"{save_as_prefix} {ip}",
             }
         )
     return cmds
+
+
+def plan_baseline_conntrack_commands(biz_target_ips: List[str]) -> List[Dict[str, Any]]:
+    """TCP 探测前 baseline nf_conntrack grep（业务路径联合诊断）。"""
+    if not biz_target_ips:
+        return []
+    return _build_nf_conntrack_probe_commands(
+        biz_target_ips,
+        save_as_prefix="diagnose:nf_conntrack baseline grep",
+    )
+
+
+def plan_post_tcp_conntrack_commands(biz_target_ips: List[str]) -> List[Dict[str, Any]]:
+    """TCP 完成后、traceroute 前的 post nf_conntrack grep。"""
+    if not biz_target_ips:
+        return []
+    return _build_nf_conntrack_probe_commands(biz_target_ips)
+
+
+def _raisecom_runtime_state_commands() -> List[Dict[str, Any]]:
+    """Raisecom 运行态命令（路由/ipset/接口等；不含 conntrack）。"""
+    return [
+        {
+            "name": "show link-protect status",
+            "priority": 1,
+            "optional": True,
+            "save_as": "show link-protect status",
+        },
+        {
+            "name": "show url-group all domain all",
+            "priority": 1,
+            "optional": True,
+            "save_as": "show url-group all domain all",
+        },
+        {
+            "name": "diagnose:ipset --list",
+            "priority": 1,
+            "optional": True,
+            "save_as": "diagnose:ipset --list",
+        },
+        {
+            "name": "show ip route",
+            "priority": 1,
+            "optional": True,
+            "save_as": "show ip route",
+        },
+        {
+            "name": "diagnose:ip rule show",
+            "priority": 1,
+            "optional": True,
+            "save_as": "diagnose:ip rule show",
+        },
+        {
+            "name": "diagnose:ip route show table 99",
+            "priority": 1,
+            "optional": True,
+            "save_as": "diagnose:ip route show table 99",
+        },
+        {
+            "name": "diagnose:ip route show table 100",
+            "priority": 1,
+            "optional": True,
+            "save_as": "diagnose:ip route show table 100",
+        },
+        {
+            "name": "diagnose:iptables -t mangle -nvL",
+            "priority": 1,
+            "optional": True,
+            "save_as": "diagnose:iptables -t mangle -nvL",
+        },
+        {
+            "name": "show interface ge1",
+            "priority": 1,
+            "optional": True,
+            "save_as": "show interface ge1",
+        },
+        {
+            "name": "show interface vlan1",
+            "priority": 1,
+            "optional": True,
+            "save_as": "show interface vlan1",
+        },
+    ]
+
+
+def plan_runtime_probe_commands(
+    device_type: str,
+    biz_target_ips: List[str] | None = None,
+) -> List[Dict[str, Any]]:
+    """TCP 完成后立即下发的运行态命令（post conntrack 优先，再路由/ipset 等）。"""
+    if device_type not in ("raisecom_msg5200", "raisecom_msg5200b", "raisecom_msg5200d"):
+        return []
+    cmds: List[Dict[str, Any]] = []
+    if biz_target_ips:
+        cmds.extend(plan_post_tcp_conntrack_commands(biz_target_ips))
+    cmds.extend(_raisecom_runtime_state_commands())
+    return cmds
+
+
+def filter_commands_skip_keys(
+    commands: List[Dict[str, Any]],
+    skip_keys: Set[str],
+) -> List[Dict[str, Any]]:
+    """过滤 ``save_as`` 已在 ``skip_keys`` 中的命令。"""
+    if not skip_keys:
+        return list(commands)
+    out: List[Dict[str, Any]] = []
+    for cmd in commands:
+        save_as = cmd.get("save_as", cmd.get("name", ""))
+        if save_as in skip_keys:
+            continue
+        out.append(cmd)
+    return out
 
 
 def _build_tunnel_peer_ping_commands(peer_ips: List[str]) -> List[Dict[str, Any]]:
@@ -69,11 +190,12 @@ def plan_post_topology_probe_commands(
     tunnel_peer_ips: List[str] | None = None,
     *,
     include_tunnel_peer_probes: bool = True,
+    skip_keys: Set[str] | None = None,
 ) -> List[Dict[str, Any]]:
     """根据主采集阶段确定的 ``device_type`` 生成拓扑后探测命令列表。
 
     Raisecom 5200A/B：主采集已含 ``diagnose:ip rule`` 等；此处补充运行态与业务清单类命令。
-    诊断 shell 入口由 ``CpeCollector`` 按 ``raisecom_msg5200b``→``su``、``raisecom_msg5200``→``diagnose`` 路由。
+    诊断 shell 入口由 ``CpeCollector`` 按 ``raisecom_msg5200b``/``raisecom_msg5200d``→``su``、``raisecom_msg5200``→``diagnose`` 路由。
 
     Args:
         device_type: ``ConfigParserRegistry`` / ``CpeCollector`` 设备标识。
@@ -81,11 +203,12 @@ def plan_post_topology_probe_commands(
         tunnel_peer_ips: 隧道对端 IP 列表；用于诊断视图 ping，**不得**传入业务目的 IP。
         include_tunnel_peer_probes: 为 ``False`` 时不下发隧道 peer ICMP（业务路径诊断联合
             默认如此，避免把隧道库存探测误绑到声明业务）；深度诊断默认 ``True``。
+        skip_keys: 已在并行 CPE 采集中执行的 ``save_as``，避免重复下发。
 
     Returns:
         与 ``CpeCollector._execute_commands`` 兼容的命令字典列表。
     """
-    if device_type in ("raisecom_msg5200", "raisecom_msg5200b"):
+    if device_type in ("raisecom_msg5200", "raisecom_msg5200b", "raisecom_msg5200d"):
         cmds = [
             {
                 "name": "show link-protect status",
@@ -107,8 +230,8 @@ def plan_post_topology_probe_commands(
             },
         ]
         if biz_target_ips:
-            cmds.extend(_build_nf_conntrack_probe_commands(list(dict.fromkeys(biz_target_ips))))
+            cmds.extend(_build_nf_conntrack_probe_commands(_dedupe_ips(biz_target_ips)))
         if tunnel_peer_ips and include_tunnel_peer_probes:
-            cmds.extend(_build_tunnel_peer_ping_commands(list(dict.fromkeys(tunnel_peer_ips))))
-        return cmds
+            cmds.extend(_build_tunnel_peer_ping_commands(_dedupe_ips(tunnel_peer_ips)))
+        return filter_commands_skip_keys(cmds, skip_keys or set())
     return []

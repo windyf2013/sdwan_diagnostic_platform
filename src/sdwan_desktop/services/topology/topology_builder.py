@@ -29,6 +29,8 @@ def _humanize_cpe_vendor(vendor_id: Optional[str]) -> Optional[str]:
         return None
     if vendor_id == "raisecom_msg5200b":
         return "Raisecom (MSG5200B)"
+    if vendor_id == "raisecom_msg5200d":
+        return "Raisecom (MSG5200D)"
     if vendor_id == "raisecom_msg5200":
         return "Raisecom (MSG5200A)"
     return vendor_id

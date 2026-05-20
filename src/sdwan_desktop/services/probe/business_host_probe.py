@@ -17,7 +17,7 @@ import copy
 import ipaddress
 import logging
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence, Tuple
 
 from sdwan_desktop.core.types.context import FlowContext
 from sdwan_desktop.core.types.tool import ToolRequest, ToolResponse
@@ -236,6 +236,220 @@ async def _run_traceroute_to_host(
         )
 
 
+async def _probe_dns_only(
+    ctx: FlowContext,
+    spec: BizDomainPortSpec,
+    dns_server: Optional[str],
+    dispatcher: ToolDispatcher,
+    tcp_timeout: int,
+    *,
+    compare_system_dns: bool,
+) -> Tuple[Dict[str, Any], List[str]]:
+    """单域名 DNS 阶段；返回行骨架与错误片段。"""
+    err_parts: List[str] = []
+    row: Dict[str, Any] = {
+        "domain": spec.domain,
+        "port": spec.port,
+        "dns": {"status": "pending", "data": None, "error": None},
+        "tcp": [],
+        "trace": [],
+    }
+    system_block: Optional[Dict[str, Any]] = None
+    if compare_system_dns and dns_server:
+        system_block = await _dns_query_a(ctx, spec.domain, None, dispatcher, tcp_timeout)
+
+    row["dns"] = await _dns_query_a(ctx, spec.domain, dns_server, dispatcher, tcp_timeout)
+    if system_block is not None:
+        row["dns_comparison"] = _dns_comparison_payload(system_block, row["dns"])
+
+    if row["dns"]["status"] == "error":
+        err_parts.append(f"{spec.domain}: dns {row['dns'].get('error')}")
+    elif row["dns"]["status"] == "no_a":
+        err_parts.append(f"{spec.domain}: 无 IPv4 A 记录")
+    return row, err_parts
+
+
+async def _probe_tcp_for_row(
+    ctx: FlowContext,
+    row: Dict[str, Any],
+    spec: BizDomainPortSpec,
+    dispatcher: ToolDispatcher,
+    max_addrs_per_domain: int,
+    tcp_count: int,
+    tcp_timeout: int,
+) -> List[str]:
+    """对已有 DNS 行的域名执行 TCP；返回错误片段。"""
+    err_parts: List[str] = []
+    if row["dns"]["status"] not in ("ok",):
+        return err_parts
+    resolved = _ipv4_only((row["dns"].get("data") or {}).get("resolved_ips") or [])
+    row["tcp"] = []
+    for ip in resolved[:max_addrs_per_domain]:
+        tcp_req = ToolRequest(
+            tool_name="tcping",
+            parameters={
+                "host": ip,
+                "port": spec.port,
+                "count": tcp_count,
+                "timeout": tcp_timeout,
+            },
+            trace_id=ctx.trace_id,
+        )
+        tcp_entry: Dict[str, Any] = {"host": ip, "port": spec.port}
+        try:
+            tcp_resp: ToolResponse = await dispatcher.dispatch(
+                tool_name="tcping",
+                request=tcp_req,
+                ctx=ctx,
+            )
+        except Exception as exc:
+            logger.warning("TCP 探测失败 %s:%s %s", ip, spec.port, exc)
+            tcp_entry["status"] = "error"
+            tcp_entry["error"] = str(exc)
+            err_parts.append(f"{spec.domain}@{ip}:{spec.port} tcp {exc}")
+            row["tcp"].append(tcp_entry)
+            continue
+
+        if tcp_resp.success and tcp_resp.data:
+            tcp_entry["status"] = "ok"
+            tcp_entry["data"] = {
+                "port_open": tcp_resp.data.get("port_open"),
+                "response_time_avg": tcp_resp.data.get("response_time_avg"),
+                "loss_rate": tcp_resp.data.get("loss_rate"),
+            }
+        else:
+            tcp_entry["status"] = "error"
+            tcp_entry["error"] = tcp_resp.error_message or tcp_resp.error_code
+            err_parts.append(f"{spec.domain}@{ip}:{spec.port} tcp {tcp_entry['error']}")
+        row["tcp"].append(tcp_entry)
+    return err_parts
+
+
+async def _probe_trace_for_row(
+    ctx: FlowContext,
+    row: Dict[str, Any],
+    spec: BizDomainPortSpec,
+    dispatcher: ToolDispatcher,
+    *,
+    enable_traceroute: bool,
+    traceroute_max_hops: int,
+    traceroute_timeout: int,
+    traceroute_protocol: str,
+) -> None:
+    """对已有 DNS 行的域名执行 traceroute（旁证）。"""
+    row["trace"] = []
+    if not enable_traceroute or row["dns"]["status"] != "ok":
+        return
+    resolved = _ipv4_only((row["dns"].get("data") or {}).get("resolved_ips") or [])
+    if not resolved:
+        return
+    trace_host = resolved[0]
+    tr_resp = await _run_traceroute_to_host(
+        ctx,
+        trace_host,
+        dispatcher,
+        max_hops=traceroute_max_hops,
+        per_hop_timeout=traceroute_timeout,
+        protocol=traceroute_protocol,
+    )
+    if not tr_resp.success:
+        logger.info(
+            "业务探测 traceroute 未成功（不计入 aggregate_error）: %s %s",
+            trace_host,
+            tr_resp.error_message,
+        )
+    row["trace"].append(_trace_entry_from_tool_response(trace_host, spec.port, tr_resp))
+
+
+def _resolved_ips_from_rows(rows: Sequence[Dict[str, Any]]) -> List[str]:
+    ips: List[str] = []
+    for row in rows:
+        dns = row.get("dns") if isinstance(row.get("dns"), dict) else {}
+        if dns.get("status") == "ok":
+            data = dns.get("data") if isinstance(dns.get("data"), dict) else {}
+            ips.extend(_ipv4_only(data.get("resolved_ips") or []))
+    return list(dict.fromkeys(ips))
+
+
+async def _run_phased_business_probes(
+    ctx: FlowContext,
+    targets: Sequence[BizDomainPortSpec],
+    dns_server: Optional[str],
+    dispatcher: ToolDispatcher,
+    max_addrs_per_domain: int,
+    tcp_count: int,
+    tcp_timeout: int,
+    *,
+    compare_system_dns: bool,
+    enable_traceroute: bool,
+    traceroute_max_hops: int,
+    traceroute_timeout: int,
+    traceroute_protocol: str,
+    on_biz_ips_ready: Callable[[List[str]], Awaitable[None]],
+    on_tcp_probe_done: Callable[[List[str]], Awaitable[None]],
+) -> Tuple[List[Dict[str, Any]], Optional[str]]:
+    """联合诊断：全局 DNS → notify → 全局 TCP → notify → 全局 traceroute。"""
+    err_parts: List[str] = []
+    rows: List[Dict[str, Any]] = []
+
+    dns_pairs = await asyncio.gather(
+        *[
+            _probe_dns_only(
+                ctx,
+                spec,
+                dns_server,
+                dispatcher,
+                tcp_timeout,
+                compare_system_dns=compare_system_dns,
+            )
+            for spec in targets
+        ]
+    )
+    for row, errs in dns_pairs:
+        rows.append(row)
+        err_parts.extend(errs)
+
+    all_ips = _resolved_ips_from_rows(rows)
+    await on_biz_ips_ready(all_ips)
+
+    tcp_tasks = [
+        _probe_tcp_for_row(
+            ctx,
+            rows[i],
+            targets[i],
+            dispatcher,
+            max_addrs_per_domain,
+            tcp_count,
+            tcp_timeout,
+        )
+        for i in range(len(targets))
+    ]
+    tcp_err_lists = await asyncio.gather(*tcp_tasks)
+    for errs in tcp_err_lists:
+        err_parts.extend(errs)
+
+    await on_tcp_probe_done(all_ips)
+
+    await asyncio.gather(
+        *[
+            _probe_trace_for_row(
+                ctx,
+                rows[i],
+                targets[i],
+                dispatcher,
+                enable_traceroute=enable_traceroute,
+                traceroute_max_hops=traceroute_max_hops,
+                traceroute_timeout=traceroute_timeout,
+                traceroute_protocol=traceroute_protocol,
+            )
+            for i in range(len(targets))
+        ]
+    )
+
+    agg_err = "; ".join(err_parts) if err_parts else None
+    return rows, agg_err
+
+
 async def _probe_one_business_domain(
     ctx: FlowContext,
     spec: BizDomainPortSpec,
@@ -360,6 +574,8 @@ async def run_business_domain_port_probes(
     traceroute_max_hops: int = DEFAULT_TRACEROUTE_MAX_HOPS,
     traceroute_timeout: int = DEFAULT_TRACEROUTE_TIMEOUT,
     traceroute_protocol: str = DEFAULT_TRACEROUTE_PROTOCOL,
+    on_biz_ips_ready: Optional[Callable[[List[str]], Awaitable[None]]] = None,
+    on_tcp_probe_done: Optional[Callable[[List[str]], Awaitable[None]]] = None,
 ) -> Tuple[List[Dict[str, Any]], Optional[str]]:
     """在 PC 侧对多个 ``域名:端口`` 执行 DNS(A)、TCP 握手与可选 ICMP 路径追踪。
 
@@ -387,6 +603,24 @@ async def run_business_domain_port_probes(
     """
     if not targets:
         return [], None
+
+    if on_biz_ips_ready is not None and on_tcp_probe_done is not None:
+        return await _run_phased_business_probes(
+            ctx,
+            targets,
+            dns_server,
+            dispatcher,
+            max_addrs_per_domain,
+            tcp_count,
+            tcp_timeout,
+            compare_system_dns=compare_system_dns,
+            enable_traceroute=enable_traceroute,
+            traceroute_max_hops=traceroute_max_hops,
+            traceroute_timeout=traceroute_timeout,
+            traceroute_protocol=traceroute_protocol,
+            on_biz_ips_ready=on_biz_ips_ready,
+            on_tcp_probe_done=on_tcp_probe_done,
+        )
 
     tasks = [
         _probe_one_business_domain(

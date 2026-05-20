@@ -88,13 +88,14 @@ class DeepDiveTab(QWidget):
         wire_report_action_labels(window, self._report_actions())
 
     def _init_ui(self) -> None:
-        root, form, self.status_label = diagnosis_tab_layout(
+        root, form, _tab_status = diagnosis_tab_layout(
             self,
             (
                 "深度诊断：CPE 配置/运行态专检 + 拓扑；默认对 baidu / youtube / tiktok "
                 "做 PC 侧 DNS(A)+TCP+traceroute「链路分流」探测（与 CLI deep-dive 默认一致，"
                 "不含 DNS 系统对照即「DNS 分流」）。"
             ),
+            include_tab_status=False,
         )
 
         g_cpe = QGroupBox("CPE 连接（必填）")
@@ -191,7 +192,11 @@ class DeepDiveTab(QWidget):
         row.addWidget(self.save_as_btn)
         row.addStretch()
         root.addLayout(row)
-        root.addWidget(self.status_label)
+
+    def _set_main_status(self, text: str) -> None:
+        self._ensure_main_window()
+        if self._main is not None:
+            set_compact_status(self._main.status_label, text)
 
     def _report_actions(self) -> GuiReportActions:
         return GuiReportActions(
@@ -261,10 +266,6 @@ class DeepDiveTab(QWidget):
         if isinstance(win, MainWindow):
             self.attach_main_window(win)
 
-    def _on_progress(self, percent: int, text: str) -> None:
-        if text:
-            set_compact_status(self.status_label, text)
-
     def on_start_diagnosis(self) -> None:
         if self._worker and self._worker.isRunning():
             return
@@ -296,24 +297,17 @@ class DeepDiveTab(QWidget):
         self.start_btn.setEnabled(False)
         set_report_actions_enabled(self._report_actions(), None, main=self._main)
         if deep_dive_use_inprocess():
-            set_compact_status(
-                self.status_label,
-                "正在启动深度诊断（进程内，CPE 采集可能需数分钟）…",
-            )
+            self._set_main_status("正在启动深度诊断（进程内，CPE 采集可能需数分钟）…")
             logger.info("deep-dive GUI in-process: cpe=%s", params.cpe_host)
             worker: object = DeepDiveWorker(params, out_path)
         else:
-            set_compact_status(
-                self.status_label,
-                "正在启动深度诊断（与 CLI 相同子进程）…",
-            )
+            self._set_main_status("正在启动深度诊断（与 CLI 相同子进程）…")
             argv = params.to_argv()
             logger.info("deep-dive GUI subprocess: cpe=%s argv=%s", params.cpe_host, argv[:8])
             worker = AgentctlWorker(argv, out_path)
 
         self._worker = worker
         self.diagnosis_started.emit(worker)
-        worker.progress_updated.connect(self._on_progress)  # type: ignore[attr-defined]
         worker.finished_ok.connect(self._on_done)  # type: ignore[attr-defined]
         worker.finished_err.connect(self._on_err)  # type: ignore[attr-defined]
         worker.finished.connect(self._on_worker_finished)  # type: ignore[attr-defined]
@@ -329,7 +323,7 @@ class DeepDiveTab(QWidget):
         self._last_out = deliver_gui_report(
             self._main,
             p,
-            status_setter=lambda t: set_compact_status(self.status_label, t),
+            status_setter=self._set_main_status,
             actions=self._report_actions(),
             parent=self,
             auto_open=True,
@@ -344,7 +338,7 @@ class DeepDiveTab(QWidget):
                 if part.strip().startswith("原因:"):
                     brief = part.strip()
                     break
-        set_compact_status(self.status_label, f"失败：{brief[:120]}")
+        self._set_main_status(f"失败：{brief[:120]}")
         QMessageBox.critical(self, "深度诊断", msg[:2000])
 
     def _on_preview(self) -> None:
@@ -359,4 +353,4 @@ class DeepDiveTab(QWidget):
         if self._last_out:
             self._last_out = prompt_save_report(self._last_out, self)
             set_report_actions_enabled(self._report_actions(), self._last_out, main=self._main)
-            set_compact_status(self.status_label, f"已保存: {self._last_out}")
+            self._set_main_status(f"已保存: {self._last_out}")

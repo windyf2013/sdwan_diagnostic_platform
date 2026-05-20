@@ -48,6 +48,10 @@ from sdwan_desktop.interface.gui.app_icon import apply_app_icon, configure_platf
 from sdwan_desktop.interface.gui.deferred_tab import DeferredTabHost
 from sdwan_desktop.interface.gui.report_flow import open_html_externally
 from sdwan_desktop.interface.gui.styles.theme import ThemeManager
+from sdwan_desktop.interface.gui.tab_form_layout import (
+    configure_status_bar_label,
+    set_compact_status,
+)
 
 PROFILE_FULL = "full"
 PROFILE_CORE = "core"
@@ -98,6 +102,7 @@ class MainWindow(QMainWindow):
         self.setStatusBar(self.status_bar)
 
         self.status_label = QLabel("就绪")
+        configure_status_bar_label(self.status_label)
         self.progress_bar = QProgressBar()
         self.progress_bar.setVisible(False)
         self.progress_bar.setMaximumWidth(200)
@@ -197,8 +202,9 @@ class MainWindow(QMainWindow):
     def toggle_theme(self) -> None:
         self.current_theme = "dark" if self.current_theme == "light" else "light"
         ThemeManager.apply_theme(self.current_theme)
-        self.status_label.setText(
-            f"已切换到{'深色' if self.current_theme == 'dark' else '浅色'}主题"
+        set_compact_status(
+            self.status_label,
+            f"已切换到{'深色' if self.current_theme == 'dark' else '浅色'}主题",
         )
 
     def begin_diagnosis(self, worker: object) -> None:
@@ -210,7 +216,7 @@ class MainWindow(QMainWindow):
         self.cancel_btn.setVisible(True)
         self.progress_bar.setVisible(True)
         self.progress_bar.setValue(0)
-        self.status_label.setText("诊断进行中…")
+        set_compact_status(self.status_label, "诊断进行中…")
         self._progress_coalescer = connect_worker_progress(
             worker, self._apply_worker_progress
         )
@@ -219,7 +225,7 @@ class MainWindow(QMainWindow):
         """与各 Tab 内进度条共用同一进度/状态源（底栏）。"""
         self.progress_bar.setValue(int(percent))
         if text:
-            self.status_label.setText(text)
+            set_compact_status(self.status_label, text)
 
     def end_diagnosis(self, worker: object | None = None) -> None:
         coalescer = getattr(self, "_progress_coalescer", None)
@@ -230,7 +236,7 @@ class MainWindow(QMainWindow):
         self.current_worker = None
         self.cancel_btn.setVisible(False)
         self.progress_bar.setVisible(False)
-        self.status_label.setText("就绪")
+        set_compact_status(self.status_label, "就绪")
 
     def open_report_preview(
         self,
@@ -240,7 +246,7 @@ class MainWindow(QMainWindow):
         offer_save: bool = False,
     ) -> None:
         if path.suffix.lower() != ".html":
-            self.status_label.setText(f"报告已生成（非 HTML）: {path.name}")
+            set_compact_status(self.status_label, f"报告已生成（非 HTML）: {path.name}")
             return
         if offer_save:
             dest, _ = QFileDialog.getSaveFileName(
@@ -252,10 +258,10 @@ class MainWindow(QMainWindow):
             if dest:
                 Path(dest).write_bytes(path.read_bytes())
                 path = Path(dest)
-                self.status_label.setText(f"已保存: {path.name}")
+                set_compact_status(self.status_label, f"已保存: {path.name}")
         if not self.supports_embedded_preview or self.report_viewer is None:
             open_html_externally(path)
-            self.status_label.setText(f"已在浏览器打开: {path.name}")
+            set_compact_status(self.status_label, f"已在浏览器打开: {path.name}")
             return
         self.report_viewer.load_from_path(path)
         if switch_tab:
@@ -269,7 +275,7 @@ class MainWindow(QMainWindow):
             if callable(cancel):
                 cancel()
             self.end_diagnosis()
-            self.status_label.setText("诊断已取消")
+            set_compact_status(self.status_label, "诊断已取消")
 
     def closeEvent(self, event) -> None:
         if self.is_diagnosing:

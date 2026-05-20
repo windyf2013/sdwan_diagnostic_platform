@@ -204,11 +204,9 @@ class TestRootCauseEngine:
             },
         }
         causes = engine.analyze(mock_topology, result, mock_pc_data, targeted_probe=probe)
-        nat = next(c for c in causes if c.cause_id == "CPE-004")
-        policy = next(c for c in causes if c.cause_id == "CPE-003")
-        assert nat.confidence <= 0.66
-        assert policy.confidence <= 0.66
-        assert "不能" in nat.description
+        cfg = next(c for c in causes if c.cause_id == "CPE-CONFIG-HEURISTIC")
+        assert cfg.confidence <= 0.66
+        assert "不能" in cfg.description or "零命中" in cfg.description
 
     def test_session_evidence_reduces_nat_policy_confidence_when_established(
         self, engine, mock_topology, mock_pc_data
@@ -240,11 +238,9 @@ class TestRootCauseEngine:
             },
         }
         causes = engine.analyze(mock_topology, result, mock_pc_data, targeted_probe=probe)
-        nat = next(c for c in causes if c.cause_id == "CPE-004")
-        policy = next(c for c in causes if c.cause_id == "CPE-003")
-        assert nat.confidence <= 0.62
-        assert policy.confidence <= 0.62
-        assert "ESTABLISHED:1" in nat.description
+        cfg = next(c for c in causes if c.cause_id == "CPE-CONFIG-HEURISTIC")
+        assert cfg.confidence <= 0.62
+        assert "已建立" in cfg.description or "ESTABLISHED" in cfg.description
 
     def test_reconcile_policy_severity_when_targeted_business_all_ok(
         self, engine, mock_topology, mock_pc_data
@@ -277,9 +273,9 @@ class TestRootCauseEngine:
             },
         }
         causes = engine.analyze(mock_topology, result, mock_pc_data, targeted_probe=probe)
-        policy = next(c for c in causes if c.cause_id == "CPE-003")
-        assert policy.severity == Severity.WARNING
-        assert "与本机/拓扑后探测一致" in policy.description
+        cfg = next(c for c in causes if c.cause_id == "CPE-CONFIG-HEURISTIC")
+        assert cfg.severity == Severity.WARNING
+        assert "已达通" in cfg.title or "已达通" in cfg.description
 
     def test_session_time_wait_uses_closing_residual_branch(
         self, engine, mock_topology, mock_pc_data
@@ -319,9 +315,81 @@ class TestRootCauseEngine:
             },
         }
         causes = engine.analyze(mock_topology, result, mock_pc_data, targeted_probe=probe)
-        policy = next(c for c in causes if c.cause_id == "CPE-003")
-        assert "收尾态" in policy.description
-        assert "上游/远端不响应" not in policy.description
+        cfg = next(c for c in causes if c.cause_id == "CPE-CONFIG-HEURISTIC")
+        assert "收尾态" in cfg.description
+        assert "上游/远端不响应" not in cfg.description
+
+    def test_cpe004_suppressed_for_sdwan_overlay_url_group(
+        self, engine, mock_topology, mock_pc_data
+    ):
+        """5200B 声明域命中 url-group（sdwan_overlay）时不应再报 CPE-004 NAT inside。"""
+        config = CpeConfiguration(
+            vendor="raisecom",
+            model="MSG5200B",
+            vpn_tunnels=[],
+            nat_rules=[
+                NatRuleInfo(protocol="tcp", inside_addr="10.10.0.0/16", outside_addr="1.1.1.1")
+            ],
+        )
+        result = CollectorResult(success=True, data={"cpe_configuration": config})
+        probe = {
+            "status": "ok",
+            "data": {
+                "business_probes": [
+                    {
+                        "domain": "www.tiktok.com",
+                        "port": 443,
+                        "dns": {"status": "ok", "data": {"resolved_ips": ["1.2.3.4"]}, "error": None},
+                        "tcp": [{"host": "1.2.3.4", "port": 443, "status": "error", "error": "timeout"}],
+                    }
+                ],
+                "raw_outputs": {
+                    "show url-group all domain all": "url-group liveBroadcast\ntiktok.com\n!\n",
+                    "running-config": (
+                        "url-group liveBroadcast\n url match suffix\n priority 150\n exit\n"
+                    ),
+                },
+            },
+        }
+        causes = engine.analyze(mock_topology, result, mock_pc_data, targeted_probe=probe)
+        assert not any(c.cause_id == "CPE-004" for c in causes)
+
+    def test_cpe004_still_emitted_for_internet_underlay_domain(
+        self, engine, mock_topology, mock_pc_data
+    ):
+        """未入 url-group 的 Internet 业务仍做 NAT inside 静态比对。"""
+        config = CpeConfiguration(
+            vendor="raisecom",
+            model="MSG5200B",
+            vpn_tunnels=[],
+            nat_rules=[
+                NatRuleInfo(protocol="tcp", inside_addr="10.10.0.0/16", outside_addr="1.1.1.1")
+            ],
+        )
+        result = CollectorResult(success=True, data={"cpe_configuration": config})
+        probe = {
+            "status": "ok",
+            "data": {
+                "business_probes": [
+                    {
+                        "domain": "www.baidu.com",
+                        "port": 443,
+                        "dns": {"status": "ok", "data": {"resolved_ips": ["8.8.8.8"]}, "error": None},
+                        "tcp": [{"host": "8.8.8.8", "port": 443, "status": "error", "error": "timeout"}],
+                    }
+                ],
+                "raw_outputs": {
+                    "show url-group all domain all": "url-group liveBroadcast\ntiktok.com\n!\n",
+                    "running-config": (
+                        "url-group liveBroadcast\n url match suffix\n priority 150\n exit\n"
+                    ),
+                },
+            },
+        }
+        causes = engine.analyze(mock_topology, result, mock_pc_data, targeted_probe=probe)
+        cfg = next((c for c in causes if c.cause_id == "CPE-CONFIG-HEURISTIC"), None)
+        assert cfg is not None
+        assert "NAT" in cfg.description or "nat" in cfg.description.lower()
 
     def test_tunnel_syn_only_downgrades_cpe003_and_cpe004(self, engine, mock_topology, mock_pc_data):
         """隧道 peer 全通且 conntrack 仅 SYN 时，不应再以 ERROR 断言策略/NAT 与隧道转发矛盾。"""
@@ -361,11 +429,9 @@ class TestRootCauseEngine:
             },
         }
         causes = engine.analyze(mock_topology, result, mock_pc_data, targeted_probe=probe)
-        p3 = next(c for c in causes if c.cause_id == "CPE-003")
-        p4 = next(c for c in causes if c.cause_id == "CPE-004")
-        assert p3.severity == Severity.WARNING
-        assert p4.severity == Severity.WARNING
-        assert "策略路由未生效" not in p3.title
-        assert "NAT 不匹配" not in p4.title
-        assert "隧道/会话观测对齐" in p3.description
-        assert "隧道/会话观测对齐" in p4.description
+        cfg = next(c for c in causes if c.cause_id == "CPE-CONFIG-HEURISTIC")
+        assert cfg.severity == Severity.WARNING
+        assert "策略路由未生效" not in cfg.title
+        assert "NAT 不匹配" not in cfg.title
+        assert "对端" in cfg.description or "隧道" in cfg.description
+        assert not any(c.cause_id in ("CPE-003", "CPE-004") for c in causes)

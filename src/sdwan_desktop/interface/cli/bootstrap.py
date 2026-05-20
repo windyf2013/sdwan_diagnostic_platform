@@ -37,6 +37,7 @@ import sdwan_desktop.flow.handlers.deep_dive_steps  # noqa: F401
 import sdwan_desktop.services.parser.vendor.cisco_sdwan  # noqa: F401
 import sdwan_desktop.services.parser.vendor.raisecom_msg5200  # noqa: F401
 import sdwan_desktop.services.parser.vendor.raisecom_msg5200b  # noqa: F401
+import sdwan_desktop.services.parser.vendor.raisecom_msg5200d  # noqa: F401
 
 CLI_MODULE_FULL = "sdwan_desktop.interface.cli.main"
 CLI_MODULE_CORE = "sdwan_desktop.interface.cli.main_core"

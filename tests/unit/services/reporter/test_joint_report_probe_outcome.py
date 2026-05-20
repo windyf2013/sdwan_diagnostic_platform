@@ -135,13 +135,14 @@ def test_tiktok_beyond_tunnel_primary_fault_is_singular_remote() -> None:
     assert "conntrack" in ruled_out_text
     assert "CPE 邻域" in ruled_out_text
 
-    # 待核对：CPE-003/004 必须出现且文案明确「待核对」「不得等同于」。
+    # 待核对：配置启发式合并为单条，禁止 CPE-003/004 并列堆叠。
     ids = {f["id"] for f in out["secondary_findings"]}
-    assert {"CPE-003", "CPE-004"}.issubset(ids)
-    for f in out["secondary_findings"]:
-        if f["id"] in {"CPE-003", "CPE-004"}:
-            assert "待核对" in f["label"]
-            assert "静态" in f["note"]
+    assert "CPE-CONFIG-HEURISTIC" in ids
+    assert "CPE-003" not in ids
+    assert "CPE-004" not in ids
+    cfg = next(f for f in out["secondary_findings"] if f["id"] == "CPE-CONFIG-HEURISTIC")
+    assert "复核" in cfg["label"]
+    assert "合并" in cfg["note"] or "静态" in cfg["note"]
 
     # 探测明细仍在 results 中可见，未删减。
     assert out["results"][0]["target"] == "www.tiktok.com:443"
@@ -209,9 +210,9 @@ def test_primary_fault_in_domain_tcp_failure() -> None:
         business_fault_beyond_tunnel_edge=False,
     )
     assert out["primary_fault"] == "服务器不可达"
-    # 即便 beyond=False，CPE-003 仍以「待核对」呈现（非主因）
     ids = {f["id"] for f in out["secondary_findings"]}
-    assert "CPE-003" in ids
+    assert "CPE-CONFIG-HEURISTIC" in ids
+    assert "CPE-003" not in ids
     assert "公网/对端" not in out["primary_fault"]
 
 

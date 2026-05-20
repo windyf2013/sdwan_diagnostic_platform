@@ -77,6 +77,7 @@ BUSINESS_DIAGNOSE_FLOW = FlowDefinition(
             "targeted_probe",
             "overlay_policy_flow",
             "joint_needed",
+            "_parallel_cpe_task",
         ],
     },
 )

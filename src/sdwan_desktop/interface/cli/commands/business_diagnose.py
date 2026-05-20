@@ -42,12 +42,18 @@ from sdwan_desktop.services.diagnosis.business_diagnose_followup import (
     business_probe_requires_joint_diagnosis,
     run_joint_root_cause_after_business_probe,
 )
-from sdwan_desktop.services.diagnosis.declared_business_datapath import (
-    targeted_probe_has_business_target_conntrack_hits,
+from sdwan_desktop.services.diagnosis.business_joint_runtime_coordinator import (
+    await_parallel_cpe_collect,
+    orchestrate_business_probe_with_parallel_cpe_collect,
+)
+from sdwan_desktop.services.diagnosis.joint_business_topology_enrichment import (
+    apply_joint_datapath_and_path_analysis,
+)
+from sdwan_desktop.services.diagnosis.joint_overlay_datapath_gate import (
+    compute_joint_overlay_datapath_gate,
 )
 from sdwan_desktop.services.diagnosis.raisecom_msg5200b_session import (
     JointOverlayDatapathGate,
-    compute_joint_overlay_datapath_gate,
 )
 from sdwan_desktop.services.diagnosis.business_diagnosis import (
     BusinessDiagnosisOutcome,
@@ -131,7 +137,11 @@ def _filter_business_joint_causes_for_datapath_accuracy(
     for c in causes:
         if c.cause_id in _TUNNEL_INVENTORY_CAUSE_IDS or c.cause_id.startswith("OVERLAY-"):
             continue
-        if targeted_business_all_ok and c.cause_id in ("CPE-003", "CPE-004"):
+        if targeted_business_all_ok and c.cause_id in (
+            "CPE-003",
+            "CPE-004",
+            "CPE-CONFIG-HEURISTIC",
+        ):
             continue
         out.append(c)
     return out
@@ -445,7 +455,7 @@ def _annotate_problem_nodes(
         elif cid in ("CPE-001", "RAISECOM-LINK-PROT-001"):
             add_marker(cpe_id, c.title, "cpe")
             add_edge_marker(pc_id, cpe_id, c.title, "cpe")
-        elif cid in ("CPE-003", "CPE-004"):
+        elif cid in ("CPE-003", "CPE-004", "CPE-CONFIG-HEURISTIC"):
             if suppress_heuristic_topo or business_path_ok:
                 continue
             add_marker(cpe_id, c.title, "cpe")
@@ -659,56 +669,7 @@ def _write_joint_deep_dive_style_report(
     if cpe_result and cpe_result.success and isinstance(cpe_result.data, dict):
         cpe_cfg = cpe_result.data.get("cpe_configuration")
 
-    gate = compute_joint_overlay_datapath_gate(
-        targeted_probe if isinstance(targeted_probe, dict) else None,
-        cpe_cfg,
-        topo_dict,
-    )
-    tp_dict = targeted_probe if isinstance(targeted_probe, dict) else None
-    has_ct = targeted_probe_has_business_target_conntrack_hits(tp_dict)
-    topo_dict["declared_business_datapath_verdict"] = (
-        "overlay_evidence_positive" if gate.overlay_evidence_positive else "unverified"
-    )
-    topo_dict["report_joint_nf_conntrack_had_session_lines"] = has_ct
-    topo_dict["business_joint_suppress_overlay_topology_presentation"] = (
-        not gate.show_overlay_tunnel_strip
-    )
-    if gate.show_overlay_tunnel_strip:
-        topo_dict["joint_overlay_suppress_reason"] = ""
-    elif getattr(gate, "presentation_suppress_detail", ""):
-        topo_dict["joint_overlay_suppress_reason"] = gate.presentation_suppress_detail
-    elif has_ct:
-        topo_dict["joint_overlay_suppress_reason"] = (
-            "本轮 conntrack 已采样到声明目的地址会话，但未满足产品规则中展示隧道示意的条件。"
-            "请结合会话双向元组、FIB 表 99/100 与 traceroute 跳表明细复核。"
-        )
-    else:
-        topo_dict["joint_overlay_suppress_reason"] = (
-            "本轮对声明业务目的地址的 nf_conntrack 采样未见非空会话行"
-        )
-    topo_dict["declared_business_datapath_banner"] = gate.datapath_banner
-    topo_dict["joint_overlay_topology_note"] = gate.joint_overlay_topology_note
-    topo_dict["joint_overlay_rule_case"] = gate.rule_case
-    topo_dict["joint_evidence_tier"] = gate.evidence_tier
-    topo_dict["joint_egress_shape"] = gate.egress_shape
-    topo_dict["show_business_flow_overlay"] = gate.show_business_flow_overlay
-    if gate.url_group_supplement:
-        topo_dict["url_group_priority_supplement"] = gate.url_group_supplement
-
-    if cpe_cfg is not None:
-        from sdwan_desktop.services.diagnosis.raisecom_msg5200b_session import (
-            is_raisecom_msg5200b_cpe,
-        )
-
-        if is_raisecom_msg5200b_cpe(cpe_cfg):
-            from sdwan_desktop.services.diagnosis.raisecom_msg5200b_path_verdict import (
-                build_joint_path_evidence_dict,
-            )
-
-            topo_dict["joint_path_evidence"] = build_joint_path_evidence_dict(
-                tp_dict, cpe_cfg, topo_dict, gate
-            )
-
+    gate = apply_joint_datapath_and_path_analysis(topo_dict, targeted_probe, cpe_cfg)
     tp_dict_pres = targeted_probe if isinstance(targeted_probe, dict) else None
     biz_probe_all_ok = (
         targeted_probe_business_rows_all_ok(tp_dict_pres) if tp_dict_pres is not None else False
@@ -769,8 +730,8 @@ def _write_joint_deep_dive_style_report(
     effective_underlay_declared_focus = bool(
         underlay_declared_business_focus
         or (
-            tp_dict is not None
-            and targeted_probe_business_rows_all_ok(tp_dict)
+            tp_dict_pres is not None
+            and targeted_probe_business_rows_all_ok(tp_dict_pres)
             and not presentation.show_overlay_tunnel_strip
         )
     )
@@ -809,6 +770,16 @@ def _write_joint_deep_dive_style_report(
         business_fault_beyond_tunnel_edge=bool(
             topo_dict.get("business_fault_beyond_tunnel_edge")
         ),
+    )
+    from sdwan_desktop.services.reporter.joint_report_reading_layer import (
+        build_joint_report_reading_layer,
+    )
+
+    topo_dict["report_joint_reading_layer"] = build_joint_report_reading_layer(
+        probe_outcome=topo_dict["report_joint_probe_outcome"],
+        topology_dict=topo_dict,
+        diagnosis=diagnosis,
+        joint_failure_driven=joint_failure_driven,
     )
     if pc_snapshot is not None and hasattr(pc_snapshot, "to_json_dict"):
         topo_dict["pc_snapshot"] = pc_snapshot.to_json_dict()
@@ -1028,14 +999,26 @@ def business_diagnose(
     async def step_biz_probe(ctx: FlowContext) -> BusinessDiagnosisOutcome:
         print("[2/6] 业务 DNS/TCP/Traceroute 探测... ", end="", flush=True)
         specs_inner: List[BizDomainPortSpec] = ctx.get("biz_specs")
-        outcome = await orchestrate_business_domain_port_diagnosis(
-            ctx,
-            specs_inner,
-            ctx.get("biz_dns_server"),
-            None,
-            compare_system_dns=bool(ctx.get("biz_dns_server")),
-            enable_traceroute=not no_traceroute,
-        )
+        cpe_collector_inner = ctx.get("_cpe_collector")
+        if ctx.get("cpe_ready") and cpe_collector_inner is not None:
+            outcome, cpe_task = await orchestrate_business_probe_with_parallel_cpe_collect(
+                ctx,
+                specs_inner,
+                ctx.get("biz_dns_server"),
+                cpe_collector=cpe_collector_inner,
+                compare_system_dns=bool(ctx.get("biz_dns_server")),
+                enable_traceroute=not no_traceroute,
+            )
+            ctx.set("_parallel_cpe_task", cpe_task)
+        else:
+            outcome = await orchestrate_business_domain_port_diagnosis(
+                ctx,
+                specs_inner,
+                ctx.get("biz_dns_server"),
+                None,
+                compare_system_dns=bool(ctx.get("biz_dns_server")),
+                enable_traceroute=not no_traceroute,
+            )
         ctx.set("business_outcome", outcome)
         jn = business_probe_requires_joint_diagnosis(outcome)
         ctx.set("joint_needed", jn)
@@ -1043,6 +1026,12 @@ def business_diagnose(
             (not jn) or (jn and not ctx.get("allow_probe_only"))
         )
         ctx.set("run_joint", run_joint)
+        if not run_joint:
+            await await_parallel_cpe_collect(
+                ctx.get("_parallel_cpe_task"),
+                cancel=True,
+            )
+            ctx.set("_parallel_cpe_task", None)
         print("OK")
         return outcome
 
@@ -1097,6 +1086,9 @@ def business_diagnose(
         outcome: BusinessDiagnosisOutcome = ctx.get("business_outcome")
         pc_snapshot = ctx.get("pc_snapshot") if ctx.get("collect_pc") else None
         try:
+            await await_parallel_cpe_collect(ctx.get("_parallel_cpe_task"))
+            ctx.set("_parallel_cpe_task", None)
+            cpe_result_pre = ctx.get("cpe_result")
             topology, cpe_result, targeted_probe, causes = await run_joint_root_cause_after_business_probe(
                 ctx,
                 pc_snapshot,
@@ -1104,6 +1096,7 @@ def business_diagnose(
                 cpe_collector=cpe_collector_inner,
                 topology_builder=topology_builder_inner,
                 cpe_mgmt_ip=cpe_mgmt,
+                cpe_result=cpe_result_pre,
             )
         except Exception as exc:
             logger.error("CPE/拓扑联合分析失败: %s", exc, exc_info=True)

@@ -56,6 +56,34 @@ def raisecom_product_series_token(raw_output: str) -> Optional[str]:
     return match.group(1).strip() if match else None
 
 
+def is_raisecom_msg5200d_version_output(raw_output: str) -> bool:
+    """判断版本类输出是否属于 Raisecom MSG5200D（x86，PV D.00）。
+
+    产品指纹（``templates/feature_config_5200d.txt``）：
+
+    **5200D 判定（满足其一即真）**：
+    - ``PV`` 或 ``Product Version`` 行为固定代际硬件版本 **D.00**；
+    - ``PN`` 行含专有型号 **MSG5200-2GEC**（如 ``MSG5200-2GEC-4E-X4``）；
+    - ``PCB Version`` 为 **D.x** 且 ``Product series`` 含 **433**（与 B 同 RCIOS 4.33 代际）。
+
+    与 5200B 互斥：5200D 同样可能出现 RCIOS 4.33 / series 433，须先于 B 判定。
+    """
+    if not raw_output:
+        return False
+    if re.search(r"PV\s*:\s*D\.00\b", raw_output, re.IGNORECASE):
+        return True
+    pv_token = raisecom_product_version_token(raw_output)
+    if pv_token and pv_token.upper() == "D.00":
+        return True
+    if re.search(r"PN\s*:\s*MSG5200-2GEC", raw_output, re.IGNORECASE):
+        return True
+    if re.search(r"PCB Version\s*:\s*D\.", raw_output, re.IGNORECASE):
+        prod_series = raisecom_product_series_token(raw_output)
+        if prod_series and "433" in prod_series:
+            return True
+    return False
+
+
 def is_raisecom_msg5200b_version_output(raw_output: str) -> bool:
     """判断版本类输出是否属于 Raisecom MSG5200B。
 
@@ -79,6 +107,8 @@ def is_raisecom_msg5200b_version_output(raw_output: str) -> bool:
         若判定为 5200B 则返回 True。
     """
     if not raw_output:
+        return False
+    if is_raisecom_msg5200d_version_output(raw_output):
         return False
     if re.search(r"RCIOS\s+version\s*:\s*4\.33\.", raw_output, re.IGNORECASE):
         return True
@@ -306,7 +336,9 @@ class RaisecomMsg5200Parser(VendorConfigParser):
         output_lower = raw_output.lower()
         if not any(ind in output_lower for ind in indicators):
             return False
-        # 5200B 由专用解析器处理（与型号字符串解耦，见 is_raisecom_msg5200b_version_output）
+        # 5200B/D 由专用解析器处理（与型号字符串解耦，见 is_raisecom_msg5200*_version_output）
+        if is_raisecom_msg5200d_version_output(raw_output):
+            return False
         if is_raisecom_msg5200b_version_output(raw_output):
             return False
         return True

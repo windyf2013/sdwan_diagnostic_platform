@@ -13,7 +13,7 @@ import re
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Dict, List, Mapping, Optional, Set
 
 import paramiko
 
@@ -123,8 +123,10 @@ class CpeCollector(BaseCollector):
         )
         # diagnose 入口不得以 host# 作为结束条件；此处用宽松匹配识别 bash 子 shell（行内任意位置）
         self._bash_diag_marker = re.compile(r"(?i)bash-[0-9][^\r\n]*#")
-        # 5200B 经 su（及部分 diagnose 固件）进入 busybox/ash 时提示符为单独一行的 root ``#``，非 ``bash-N.N#``
+        # 5200B/D 经 su（及部分 diagnose 固件）进入 busybox/ash 时提示符为单独一行的 root ``#``，非 ``bash-N.N#``
         self._root_diag_shell_prompt = re.compile(r"(?m)(?:^|\r?\n)\s*#\s*$")
+        # 5200D x86 经 su 后常见 ``root@host:/#``（见 templates/feature_config_5200d.txt）
+        self._linux_root_at_host_prompt = re.compile(r"(?m)(?:^|\r?\n)\s*root@[^\r\n]+#\s*$")
         # 分页提示须先于特权提示符匹配，避免配置行尾误匹配 ``name#`` 导致截断
         self._cli_more_marker = re.compile(r"--More--", re.IGNORECASE)
 
@@ -197,7 +199,16 @@ class CpeCollector(BaseCollector):
         return bool(
             self._bash_diag_marker.search(normalized)
             or self._root_diag_shell_prompt.search(normalized)
+            or self._linux_root_at_host_prompt.search(normalized)
         )
+
+    def _diag_shell_wait_patterns(self) -> List[Any]:
+        """诊断 Linux shell 入口/读命令时等待的提示符模式。"""
+        return [
+            self._bash_diag_marker,
+            self._root_diag_shell_prompt,
+            self._linux_root_at_host_prompt,
+        ]
 
     async def collect(self, ctx: FlowContext) -> CollectorResult:
         """执行 CPE 配置采集
@@ -213,88 +224,21 @@ class CpeCollector(BaseCollector):
         self._active_device_type = None
 
         try:
-            # 1. 验证配置
-            if not await self.validate(ctx):
+            prep = await self.prepare_session(ctx)
+            if not prep.success:
                 return CollectorResult(
                     success=False,
-                    error_message="CPE 采集器配置无效",
+                    error_message=prep.error_message or "CPE 会话准备失败",
                     duration_ms=(time.time() - start_time) * 1000,
                 )
-            
-            # 2. 建立连接
-            logger.info(f"正在连接 CPE 设备: {self.config.host}:{self.config.port}")
-            await self._connect()
-            
-            # 3. 检测设备类型
-            device_type = await self._detect_device_type()
-            self._active_device_type = device_type
-            logger.info(f"检测到设备类型: {device_type}")
-
-            # 4. 加载命令模板
-            commands = self._load_command_template(device_type)
-            if not commands:
-                return CollectorResult(
-                    success=False,
-                    error_message=f"未找到设备类型 '{device_type}' 的命令模板",
-                    duration_ms=(time.time() - start_time) * 1000,
-                )
-            
-            # 5. 执行采集命令（按优先级分组）
-            await self._execute_commands(commands)
-            # 5b. Raisecom：按 running-config / 路由 / link detect 推断 overlay 等接口，补采 show interface
-            if device_type in ("raisecom_msg5200", "raisecom_msg5200b"):
-                extra_iface_cmds = build_raisecom_extra_show_interface_commands(self._raw_outputs)
-                if extra_iface_cmds:
-                    logger.info(
-                        "Raisecom 追加接口采集: %d 条 show interface（vxlan/ipsec/l2tp/tunnel 等）",
-                        len(extra_iface_cmds),
-                    )
-                    await self._execute_commands(extra_iface_cmds)
-
-            # 6. 解析配置
-            parser = ConfigParserRegistry.get_parser(device_type)
-            if not parser:
-                return CollectorResult(
-                    success=False,
-                    error_message=f"未找到设备类型 '{device_type}' 的解析器",
-                    duration_ms=(time.time() - start_time) * 1000,
-                )
-            
-            cpe_config = parser.parse_all(self._raw_outputs)
-            artifact_paths = self._persist_collected_artifacts(ctx, device_type, cpe_config)
-            
-            # 7. 断开连接
-            await self._disconnect()
-            
-            duration_ms = (time.time() - start_time) * 1000
-            
-            logger.info(
-                f"CPE 配置采集完成: vendor={cpe_config.vendor}, "
-                f"model={cpe_config.model}, version={cpe_config.version}, "
-                f"耗时={duration_ms:.0f}ms"
-            )
-            
-            return CollectorResult(
-                success=True,
-                data={
-                    "cpe_configuration": cpe_config,
-                    "artifact_paths": artifact_paths,
-                    "device_type": device_type,
-                },
-                collected_items=list(self._raw_outputs.keys()),
-                duration_ms=duration_ms,
-            )
-            
+            return await self.collect_on_open_session(ctx, start_time=start_time)
         except Exception as e:
             duration_ms = (time.time() - start_time) * 1000
             logger.error(f"CPE 配置采集失败: {e}", exc_info=True)
-            
-            # 确保断开连接
             try:
-                await self._disconnect()
+                await self.release_session()
             except Exception:
                 pass
-            
             err_text = str(e)
             if err_text.startswith("Telnet 登录失败"):
                 error_message = err_text
@@ -305,6 +249,123 @@ class CpeCollector(BaseCollector):
                 error_message=error_message,
                 duration_ms=duration_ms,
             )
+
+    async def prepare_session(self, ctx: FlowContext) -> CollectorResult:
+        """验证、建连并检测设备类型；保持连接供后续命令使用。"""
+        if not await self.validate(ctx):
+            return CollectorResult(
+                success=False,
+                error_message="CPE 采集器配置无效",
+            )
+        logger.info(f"正在连接 CPE 设备: {self.config.host}:{self.config.port}")
+        await self._connect()
+        device_type = await self._detect_device_type()
+        self._active_device_type = device_type
+        ctx.set("cpe_device_type", device_type)
+        logger.info(f"检测到设备类型: {device_type}")
+        return CollectorResult(
+            success=True,
+            data={"device_type": device_type},
+        )
+
+    async def run_commands_on_open_session(
+        self,
+        commands: List[Dict[str, Any]],
+        *,
+        skip_keys: Optional[Set[str]] = None,
+    ) -> Dict[str, str]:
+        """在已 prepare 的连接上执行命令，不断开。"""
+        from sdwan_desktop.services.probe.planner import filter_commands_skip_keys
+
+        skip = skip_keys or set(self._raw_outputs.keys())
+        filtered = filter_commands_skip_keys(commands, skip)
+        if filtered:
+            await self._execute_commands(filtered)
+        return dict(self._raw_outputs)
+
+    async def collect_on_open_session(
+        self,
+        ctx: FlowContext,
+        *,
+        start_time: Optional[float] = None,
+        skip_keys: Optional[Set[str]] = None,
+    ) -> CollectorResult:
+        """在已 prepare 的连接上执行全量模板采集、解析并断开。"""
+        t0 = start_time if start_time is not None else time.time()
+        device_type = self._active_device_type or ctx.get("cpe_device_type") or "generic"
+        try:
+            commands = self._load_command_template(device_type)
+            if not commands:
+                return CollectorResult(
+                    success=False,
+                    error_message=f"未找到设备类型 '{device_type}' 的命令模板",
+                    duration_ms=(time.time() - t0) * 1000,
+                )
+            from sdwan_desktop.services.probe.planner import filter_commands_skip_keys
+
+            skip = skip_keys or set(self._raw_outputs.keys())
+            await self._execute_commands(filter_commands_skip_keys(commands, skip))
+            if device_type in ("raisecom_msg5200", "raisecom_msg5200b", "raisecom_msg5200d"):
+                extra_iface_cmds = build_raisecom_extra_show_interface_commands(self._raw_outputs)
+                extra_iface_cmds = filter_commands_skip_keys(extra_iface_cmds, skip)
+                if extra_iface_cmds:
+                    logger.info(
+                        "Raisecom 追加接口采集: %d 条 show interface（vxlan/ipsec/l2tp/tunnel 等）",
+                        len(extra_iface_cmds),
+                    )
+                    await self._execute_commands(extra_iface_cmds)
+
+            parser = ConfigParserRegistry.get_parser(device_type)
+            if not parser:
+                return CollectorResult(
+                    success=False,
+                    error_message=f"未找到设备类型 '{device_type}' 的解析器",
+                    duration_ms=(time.time() - t0) * 1000,
+                )
+
+            cpe_config = parser.parse_all(self._raw_outputs)
+            artifact_paths = self._persist_collected_artifacts(ctx, device_type, cpe_config)
+            await self.release_session()
+
+            duration_ms = (time.time() - t0) * 1000
+            logger.info(
+                f"CPE 配置采集完成: vendor={cpe_config.vendor}, "
+                f"model={cpe_config.model}, version={cpe_config.version}, "
+                f"耗时={duration_ms:.0f}ms"
+            )
+            return CollectorResult(
+                success=True,
+                data={
+                    "cpe_configuration": cpe_config,
+                    "artifact_paths": artifact_paths,
+                    "device_type": device_type,
+                    "raw_outputs": dict(self._raw_outputs),
+                },
+                collected_items=list(self._raw_outputs.keys()),
+                duration_ms=duration_ms,
+            )
+        except Exception as e:
+            duration_ms = (time.time() - t0) * 1000
+            logger.error(f"CPE 配置采集失败: {e}", exc_info=True)
+            try:
+                await self.release_session()
+            except Exception:
+                pass
+            err_text = str(e)
+            if err_text.startswith("Telnet 登录失败"):
+                error_message = err_text
+            else:
+                error_message = f"CPE 配置采集失败: {err_text}"
+            return CollectorResult(
+                success=False,
+                error_message=error_message,
+                data={"raw_outputs": dict(self._raw_outputs)},
+                duration_ms=duration_ms,
+            )
+
+    async def release_session(self) -> None:
+        """安全断开当前 CPE 连接。"""
+        await self._disconnect()
 
     async def run_probe_commands(
         self,
@@ -709,8 +770,7 @@ class CpeCollector(BaseCollector):
                 patterns=[
                     self._cli_more_marker,
                     self._telnet_prompt_regex,
-                    self._bash_diag_marker,
-                    self._root_diag_shell_prompt,
+                    *self._diag_shell_wait_patterns(),
                 ],
                 timeout=left,
             )
@@ -730,8 +790,7 @@ class CpeCollector(BaseCollector):
         return await self._read_until_any(
             patterns=[
                 self._telnet_prompt_regex,
-                self._bash_diag_marker,
-                self._root_diag_shell_prompt,
+                *self._diag_shell_wait_patterns(),
             ],
             timeout=timeout,
         )
@@ -812,12 +871,12 @@ class CpeCollector(BaseCollector):
     async def _enter_diagnose_view(self, timeout: int = 10):
         """进入诊断 shell。
 
-        Raisecom MSG5200 系列：5200B 在 enable（host#）下使用 ``su``；5200A 使用 ``diagnose``。
-        逻辑命令仍统一为 ``diagnose:...`` 前缀，由 ``_active_device_type``（``raisecom_msg5200b`` / ``raisecom_msg5200``）
-        与版本指纹（含 ``Product series`` 433/423）决定实际交互命令，避免 5200B 误走 ``diagnose`` 导致无法进入诊断 shell。
+        Raisecom MSG5200 系列：5200B/D 在 enable（host#）下使用 ``su``；5200A 使用 ``diagnose``。
+        逻辑命令仍统一为 ``diagnose:...`` 前缀，由 ``_active_device_type``（``raisecom_msg5200b`` /
+        ``raisecom_msg5200d`` / ``raisecom_msg5200``）与版本指纹决定实际交互命令。
         """
         dev = (self._active_device_type or "").strip()
-        if dev == "raisecom_msg5200b":
+        if dev in ("raisecom_msg5200b", "raisecom_msg5200d"):
             await self._enter_diagnostic_shell_via_su(timeout=timeout)
             return
         await self._enter_diagnostic_shell_via_diagnose(timeout=timeout)
@@ -828,8 +887,7 @@ class CpeCollector(BaseCollector):
         self._telnet_diagnose_via_testnode = False
 
         entry_patterns: List[Any] = [
-            self._bash_diag_marker,
-            self._root_diag_shell_prompt,
+            *self._diag_shell_wait_patterns(),
             "password:",
             "passwd:",
         ]
@@ -846,7 +904,7 @@ class CpeCollector(BaseCollector):
             self._telnet_writer.write(f"{view_pwd}\r\n")
             await self._telnet_writer.drain()
             inter = await self._read_until_any(
-                patterns=[self._bash_diag_marker, self._root_diag_shell_prompt],
+                patterns=self._diag_shell_wait_patterns(),
                 timeout=entry_wait,
             )
 
@@ -861,8 +919,7 @@ class CpeCollector(BaseCollector):
         self._telnet_diagnose_via_testnode = False
 
         entry_patterns: List[Any] = [
-            self._bash_diag_marker,
-            self._root_diag_shell_prompt,
+            *self._diag_shell_wait_patterns(),
             "password:",
             "passwd:",
         ]
@@ -891,7 +948,7 @@ class CpeCollector(BaseCollector):
             self._telnet_writer.write(f"{view_pwd}\r\n")
             await self._telnet_writer.drain()
             inter = await self._read_until_any(
-                patterns=[self._bash_diag_marker, self._root_diag_shell_prompt],
+                patterns=self._diag_shell_wait_patterns(),
                 timeout=entry_wait,
             )
 
@@ -966,7 +1023,7 @@ class CpeCollector(BaseCollector):
                 {"name": "show sdwan bfd sessions", "priority": 2, "optional": False},
                 {"name": "show ip nat translations", "priority": 3, "optional": True},
             ]
-        if device_type in ("raisecom_msg5200", "raisecom_msg5200b"):
+        if device_type in ("raisecom_msg5200", "raisecom_msg5200b", "raisecom_msg5200d"):
             return [
                 {"name": "show version", "priority": 1, "optional": False},
                 {"name": "testnode:show version all", "priority": 1, "optional": True, "save_as": "show version all"},
@@ -1027,7 +1084,7 @@ class CpeCollector(BaseCollector):
 
                 if (
                     cmd_name == "diagnose:ip route show table 100"
-                    and (self._active_device_type or "") in ("raisecom_msg5200", "raisecom_msg5200b")
+                    and (self._active_device_type or "") in ("raisecom_msg5200", "raisecom_msg5200b", "raisecom_msg5200d")
                 ):
                     rc_out = self._raw_outputs.get("show running-config", "")
                     if self._raisecom_url_group_count(rc_out) <= 1:

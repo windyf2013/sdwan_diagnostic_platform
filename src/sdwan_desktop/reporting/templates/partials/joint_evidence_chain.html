@@ -1,0 +1,296 @@
+{# business-diagnose 联合报告：证据链（完整保留、默认折叠冗长块） #}
+{% set jpe = topology.get('joint_path_evidence') if topology else none %}
+{% set dpa = topology.get('declared_business_path_analysis') if topology else none %}
+{% set uga = dpa.url_group_analysis if dpa and dpa.url_group_analysis is mapping else {} %}
+{% set pcc = dpa.policy_chain_contrast if dpa and dpa.policy_chain_contrast is mapping else {} %}
+{% set steps = pcc.steps if pcc.steps is defined else [] %}
+{% set reach = (dpa.reachability if dpa and dpa.reachability is mapping else none) or (jpe.reachability if jpe and jpe.reachability is mapping else none) %}
+{% set l1 = jpe.l1_session if jpe and jpe.l1_session is mapping else {} %}
+{% set l3 = jpe.l3_fib if jpe and jpe.l3_fib is mapping else {} %}
+{% set l5 = jpe.l5_trace if jpe and jpe.l5_trace is mapping else {} %}
+
+{% if topology.hints %}
+<details class="joint-ev-details" open>
+    <summary>关键信息（CPE）</summary>
+    <ul class="joint-ev-list">
+        {% for line in topology.hints %}
+        <li>{{ line }}</li>
+        {% endfor %}
+    </ul>
+</details>
+{% endif %}
+
+{% if jpe %}
+<details class="joint-ev-details" open>
+    <summary>路径旁证（{{ jpe.evidence_tier_label | default(jpe.evidence_tier) }} · {{ jpe.rule_case | default('—') }})</summary>
+    <div class="joint-ev-body">
+        {% if jpe.datapath_banner_short %}
+        <p class="joint-ev-oneline"><strong>路径结论:</strong> {{ jpe.datapath_banner_short }}</p>
+        {% endif %}
+        {% if l1.summary %}
+        <p><strong>L1 会话:</strong> {{ l1.summary }}{% if l1.line_confirmed_count is defined %}（确认行 {{ l1.line_confirmed_count }}）{% endif %}</p>
+        {% if l1.sample_lines %}
+        <details class="joint-ev-nested"><summary>会话行节选</summary>
+            <pre class="joint-ev-pre">{% for line in l1.sample_lines %}{{ line }}
+{% endfor %}</pre>
+        </details>
+        {% endif %}
+        {% endif %}
+        {% if l3.summary %}
+        <p><strong>L3 FIB:</strong> {{ l3.summary }}
+            {% if l3.egress_dev %}<span class="font-mono">dev={{ l3.egress_dev }}</span>{% endif %}
+            {% if l3.table_id %} · 表 {{ l3.table_id }}{% endif %}
+            {% if l3.next_hop %} · nh {{ l3.next_hop }}{% endif %}
+            {% if l3.ipset_hint %} · {{ l3.ipset_hint }}{% endif %}
+        </p>
+        {% if l3.excerpts %}
+        <details class="joint-ev-nested"><summary>路由表节选</summary>
+            <pre class="joint-ev-pre">{% for line in l3.excerpts %}{{ line }}
+{% endfor %}</pre>
+        </details>
+        {% endif %}
+        {% endif %}
+        {% if l5.narrative_hint or l5.egress_shape %}
+        <p><strong>L5 Traceroute:</strong> {{ l5.narrative_hint or '—' }}
+            {% if l5.egress_shape %}<span class="font-mono">（{{ l5.egress_shape }}）</span>{% endif %}
+            {% if l5.overlay_hop_observed is defined %} · overlay 跳观测={{ '是' if l5.overlay_hop_observed else '否' }}{% endif %}
+        </p>
+        {% endif %}
+    </div>
+</details>
+{% endif %}
+
+{% if reach and (reach.s1_summary or reach.s2_summary or reach.primary_rule_case) %}
+<details class="joint-ev-details" open>
+    <summary>可达性（S1 / S2）</summary>
+    <div class="joint-ev-body">
+        {% if reach.s1_summary %}
+        <p><strong>S1:</strong> <span class="font-mono">{{ reach.s1_status | default('unknown') }}</span> — {{ reach.s1_summary }}</p>
+        {% endif %}
+        {% if reach.s2_summary %}
+        <p><strong>S2:</strong> <span class="font-mono">{{ reach.s2_status | default('unknown') }}</span> — {{ reach.s2_summary }}
+            {% if reach.next_hop_checked %} · nh <span class="font-mono">{{ reach.next_hop_checked }}</span>{% endif %}
+        </p>
+        {% endif %}
+        {% if reach.primary_rule_case %}
+        <p class="joint-ev-muted"><strong>规则分支:</strong> <span class="font-mono">{{ reach.primary_rule_case }}</span></p>
+        {% endif %}
+    </div>
+</details>
+{% endif %}
+
+{% if dpa %}
+<details class="joint-ev-details"{% if dpa.reconcile and dpa.reconcile.summary_for_delivery %} open{% endif %}>
+    <summary>声明业务路径（{{ dpa.config_intent | default('—') }} → {{ dpa.observed_plane | default('—') }} · {{ dpa.confidence | default('—') }})</summary>
+    <div class="joint-ev-body">
+        {% if uga.summary %}
+        <p><strong>url-group:</strong> {{ uga.summary }}</p>
+        {% endif %}
+        {% if uga.effective_selection_reason %}
+        <p><strong>生效组:</strong> <span class="font-mono">{{ uga.effective_group | default('—') }}</span> — {{ uga.effective_selection_reason }}</p>
+        {% endif %}
+        {% if uga.policy_intent_one_liner %}
+        <p><strong>策略意图:</strong> {{ uga.policy_intent_one_liner }}</p>
+        {% endif %}
+        {% if uga.link_protect_summary %}
+        <p><strong>link-protect:</strong> {{ uga.link_protect_summary }}</p>
+        {% endif %}
+        {% if uga.per_group_security and uga.per_group_security|length > 0 %}
+        <details class="joint-ev-nested"><summary>各组 security-ip</summary>
+            <table class="joint-ev-table">
+                <thead><tr><th>组</th><th>security-ip</th><th>PC 在列表</th></tr></thead>
+                <tbody>
+                {% for row in uga.per_group_security %}
+                <tr>
+                    <td class="font-mono">{{ row.group }}</td>
+                    <td>{% if row.security_ip_enabled %}启用{% else %}未启用{% endif %}</td>
+                    <td>{% if row.pc_in_list is sameas true %}是{% elif row.pc_in_list is sameas false %}否{% else %}—{% endif %}</td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </details>
+        {% endif %}
+        {% if uga.matched_groups %}
+        <details class="joint-ev-nested"><summary>命中 url-group 列表</summary>
+            <table class="joint-ev-table">
+                <thead><tr><th>组名</th><th>priority</th><th>security-ip</th><th>fwmark</th><th>表</th></tr></thead>
+                <tbody>
+                {% for g in uga.matched_groups %}
+                <tr>
+                    <td class="font-mono">{{ g.name }}</td>
+                    <td>{{ g.priority }}</td>
+                    <td>{% if g.security_ip_enabled %}启用{% else %}未启用{% endif %}</td>
+                    <td>{{ g.fwmark_hint or '—' }}</td>
+                    <td>{{ g.table_hint or '—' }}</td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </details>
+        {% endif %}
+        {% if dpa.reconcile and dpa.reconcile.summary_for_delivery %}
+        <p><strong>路径对账:</strong> {{ dpa.reconcile.summary_for_delivery }}
+            {% if dpa.reconcile.break_point %}<span class="font-mono">（{{ dpa.reconcile.break_point }}）</span>{% endif %}
+        </p>
+        {% endif %}
+        {% if steps %}
+        <details class="joint-ev-nested"><summary>策略链对照（{{ steps|length }} 阶段）</summary>
+            <table class="joint-ev-table">
+                <thead><tr><th>阶段</th><th>配置</th><th>运行</th><th>说明</th></tr></thead>
+                <tbody>
+                {% for st in steps %}
+                <tr>
+                    <td class="font-mono">{{ st.stage_id }}</td>
+                    <td>{{ st.config_status }}</td>
+                    <td>{{ st.runtime_status }}</td>
+                    <td>{{ st.narrative }}</td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+            {% for st in steps %}
+            {% if st.config_excerpt or st.runtime_excerpt %}
+            <details class="joint-ev-nested"><summary>{{ st.stage_id }} 配置/运行节选</summary>
+                {% if st.config_excerpt %}<p class="joint-ev-muted">配置</p><pre class="joint-ev-pre">{{ st.config_excerpt }}</pre>{% endif %}
+                {% if st.runtime_excerpt %}<p class="joint-ev-muted">运行</p><pre class="joint-ev-pre">{{ st.runtime_excerpt }}</pre>{% endif %}
+            </details>
+            {% endif %}
+            {% endfor %}
+        </details>
+        {% endif %}
+    </div>
+</details>
+{% endif %}
+
+{% if topology.overlay_policy_flow is defined and topology.overlay_policy_flow %}
+{% set opf = topology.overlay_policy_flow %}
+{% set opd = opf.data if opf.data is mapping else {} %}
+<details class="joint-ev-details">
+    <summary>Overlay 组网归纳（{{ opd.scenario_label | default(opf.status) }})</summary>
+    <div class="joint-ev-body">
+        <p><strong>状态:</strong> {{ opf.status }}{% if opf.error %} · {{ opf.error }}{% endif %}</p>
+        {% if opd.forwarding_note %}<p><strong>转发:</strong> {{ opd.forwarding_note }}</p>{% endif %}
+        {% if opd.scenario_tags %}<p><strong>标签:</strong> <span class="font-mono">{{ opd.scenario_tags | join(', ') }}</span></p>{% endif %}
+        {% if opd.checklist or opd.probe_evidence_notes %}
+        <details class="joint-ev-nested"><summary>核对清单与采集提示</summary>
+            {% if opd.checklist %}
+            <ul class="joint-ev-list">{% for line in opd.checklist %}<li>{{ line }}</li>{% endfor %}</ul>
+            {% endif %}
+            {% if opd.probe_evidence_notes %}
+            <p class="joint-ev-muted"><strong>已采集线索</strong></p>
+            <ul class="joint-ev-list">{% for line in opd.probe_evidence_notes %}<li>{{ line }}</li>{% endfor %}</ul>
+            {% endif %}
+        </details>
+        {% endif %}
+    </div>
+</details>
+{% endif %}
+
+{% if topology.get('pc_snapshot') %}
+{% set pcs = topology.pc_snapshot %}
+<details class="joint-ev-details">
+    <summary>PC 快照{% if pcs.hostname %}（{{ pcs.hostname }}）{% endif %}</summary>
+    <div class="joint-ev-body joint-ev-pc">
+        {% if pcs.hostname or pcs.os_version %}
+        <p>{% if pcs.hostname %}<strong>{{ pcs.hostname }}</strong>{% endif %}{% if pcs.os_version %} · {{ pcs.os_version }}{% endif %}{% if pcs.architecture %} · {{ pcs.architecture }}{% endif %}</p>
+        {% endif %}
+        {% if pcs.adapters %}
+        <details class="joint-ev-nested"><summary>网卡（{{ pcs.adapters|length }}）</summary>
+            <table class="joint-ev-table">
+                <thead><tr><th>名称</th><th>状态</th><th>IP / GW</th><th>DNS</th></tr></thead>
+                <tbody>
+                {% for ad in pcs.adapters %}
+                <tr>
+                    <td class="font-mono">{{ ad.name or '—' }}</td>
+                    <td>{% if ad.is_connected %}已连接{% else %}未连接{% endif %}</td>
+                    <td class="font-mono">{% if ad.ip_addresses %}{{ ad.ip_addresses | join(', ') }}{% else %}—{% endif %}{% if ad.default_gateway %}<br/>GW {{ ad.default_gateway }}{% endif %}</td>
+                    <td class="font-mono">{% if ad.dns_servers %}{{ ad.dns_servers | join(', ') }}{% else %}—{% endif %}</td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </details>
+        {% endif %}
+        {% if pcs.routes %}
+        <details class="joint-ev-nested"><summary>路由节选（{{ [pcs.routes|length, 12]|min }}/{{ pcs.routes|length }}）</summary>
+            <ul class="joint-ev-list font-mono">
+                {% for r in pcs.routes[:12] %}
+                <li>{{ r.destination or '0.0.0.0' }}/{{ r.netmask or '0.0.0.0' }} → {{ r.gateway or '—' }} · {{ r.interface or '—' }}</li>
+                {% endfor %}
+            </ul>
+        </details>
+        {% endif %}
+    </div>
+</details>
+{% elif topology.pc_snapshot_included is defined %}
+<p class="joint-ev-muted">{% if topology.pc_snapshot_included %}PC 快照已纳入但无明细载荷{% else %}未采集 PC 快照{% endif %}</p>
+{% endif %}
+
+{% if "targeted_probe" in topology and topology["targeted_probe"] %}
+{% set tp = topology["targeted_probe"] %}
+<details class="joint-ev-details">
+    <summary>拓扑后主动探测（{{ tp.status }})</summary>
+    <div class="joint-ev-body">
+        {% if tp.error %}<p class="joint-ev-warn">{{ tp.error }}</p>{% endif %}
+        {% if tp.data is mapping %}
+        {% set biz = tp.data.get('business_probes') %}
+        {% if biz %}
+        <details class="joint-ev-nested"><summary>业务探测表</summary>
+            <table class="joint-ev-table">
+                <thead><tr><th>域名</th><th>DNS</th><th>TCP</th><th>Trace</th></tr></thead>
+                <tbody>
+                {% for row in biz %}
+                <tr>
+                    <td class="font-mono">{{ row.domain }}:{{ row.port }}</td>
+                    <td>{{ row.dns.status }}{% if row.dns.data and row.dns.data.resolved_ips %}<br/><span class="font-mono">{{ row.dns.data.resolved_ips | join(', ') }}</span>{% endif %}</td>
+                    <td>{% for t in row.tcp %}{{ t.host }}:{{ t.port }} {{ t.status }}{% if not loop.last %}<br/>{% endif %}{% else %}—{% endfor %}</td>
+                    <td>{% for tr in row.trace|default([]) %}{{ tr.host }} {{ tr.status }}{% if not loop.last %}<br/>{% endif %}{% else %}—{% endfor %}</td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </details>
+        {% endif %}
+        {% set rawmap = tp.data.get('raw_outputs', {}) %}
+        {% set biz_ips = tp.data.get('biz_target_ips', []) %}
+        {% set ns = namespace(conn_lines=[], conn_samples=[]) %}
+        {% for k, v in rawmap.items() %}
+            {% if k.startswith('diagnose:nf_conntrack grep ') %}
+                {% for line in v.split('\n') %}
+                    {% if line.strip() %}
+                        {% set _ = ns.conn_lines.append(line.strip()) %}
+                        {% if ns.conn_samples|length < 12 %}
+                            {% set _ = ns.conn_samples.append(line.strip()) %}
+                        {% endif %}
+                    {% endif %}
+                {% endfor %}
+            {% endif %}
+        {% endfor %}
+        {% if biz_ips or ns.conn_lines|length > 0 %}
+        <details class="joint-ev-nested"><summary>nf_conntrack（{{ ns.conn_lines|length }} 行{% if biz_ips %} · IP {{ biz_ips | join(', ') }}{% endif %}）</summary>
+            {% if ns.conn_lines|length == 0 %}
+            <p class="joint-ev-warn">采样窗口内未见目标 IP 相关会话。</p>
+            {% elif ns.conn_samples %}
+            <pre class="joint-ev-pre">{% for line in ns.conn_samples %}{{ line }}
+{% endfor %}</pre>
+            {% endif %}
+        </details>
+        {% endif %}
+        {% if rawmap %}
+        <details class="joint-ev-nested"><summary>原始命令输出（{{ rawmap|length }} 项）</summary>
+            <pre class="joint-ev-pre">{% for k, v in rawmap.items() %}===== {{ k }} =====
+{{ v }}
+
+{% endfor %}</pre>
+        </details>
+        {% endif %}
+        {% endif %}
+    </div>
+</details>
+{% endif %}
+
+{% set _has_ev = topology.hints or jpe or dpa or (topology.overlay_policy_flow is defined and topology.overlay_policy_flow) or topology.get('pc_snapshot') or (topology.pc_snapshot_included is defined) or ("targeted_probe" in topology and topology["targeted_probe"]) %}
+{% if not _has_ev %}
+<p class="joint-ev-muted">本节无附加明细（仅拓扑示意）。</p>
+{% endif %}

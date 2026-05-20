@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Callable, Awaitable, Dict, List, Optional, Sequence
 
 from sdwan_desktop.core.types.context import FlowContext
 from sdwan_desktop.services.probe.business_host_probe import (
@@ -55,6 +55,8 @@ async def orchestrate_business_domain_port_diagnosis(
     traceroute_max_hops: int = DEFAULT_TRACEROUTE_MAX_HOPS,
     traceroute_timeout: int = DEFAULT_TRACEROUTE_TIMEOUT,
     traceroute_protocol: str = DEFAULT_TRACEROUTE_PROTOCOL,
+    on_biz_ips_ready: Optional[Callable[[List[str]], Awaitable[None]]] = None,
+    on_tcp_probe_done: Optional[Callable[[List[str]], Awaitable[None]]] = None,
 ) -> BusinessDiagnosisOutcome:
     """执行 DNS(A)+TCP+可选 traceroute；根因请使用 ``BusinessPathAnalyzer`` 或 ``RootCauseEngine``。
 
@@ -94,6 +96,8 @@ async def orchestrate_business_domain_port_diagnosis(
         traceroute_max_hops=traceroute_max_hops,
         traceroute_timeout=traceroute_timeout,
         traceroute_protocol=traceroute_protocol,
+        on_biz_ips_ready=on_biz_ips_ready,
+        on_tcp_probe_done=on_tcp_probe_done,
     )
     status = "partial" if agg else "ok"
     return BusinessDiagnosisOutcome(

@@ -42,6 +42,8 @@ Think first | Simplicity | Surgical only | Goal+verify | Model=judgment | Token 
 ## 工具效率
 
 先 grep/定位 → `read_file` 带 offset/limit（默认≤400 行/次）；独立只读并行；同文件相关改动合并补丁。
+用户 `@`/给定路径时先 Read 并沿 import 链扩展，import 链未穷尽前禁 Task explore 与全库 Grep·Glob。
+用户 `@`/给定路径时先 Read 并沿 import 链扩展，import 链未穷尽前禁 Task explore 与全库 Grep·Glob。
 
 ## 冲突优先级
 

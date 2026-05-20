@@ -2,784 +2,678 @@
 
 {% block title %}SD-WAN 一键体检报告{% endblock %}
 
+{% block extra_css %}
+<style>
+    /* 一键体检：紧凑首屏，复用 base 压缩后的 section/header */
+    body { background: #f0f2f5; }
+    .container { max-width: 1100px; padding: 10px 14px 32px; }
+
+    .qc-overview {
+        display: flex;
+        gap: 10px;
+        align-items: flex-start;
+        padding: 10px 12px;
+        border-radius: var(--radius-md);
+        border: 1px solid var(--border-color);
+        border-left-width: 4px;
+        margin-bottom: 10px;
+        background: var(--bg-white);
+    }
+    .qc-overview.ok { border-left-color: var(--color-success); background: #f0fdf4; }
+    .qc-overview.warn { border-left-color: var(--color-warning); background: #fffbeb; }
+    .qc-overview.bad { border-left-color: var(--color-critical); background: #fef2f2; }
+    .qc-overview-icon { font-size: 18px; line-height: 1.2; flex-shrink: 0; }
+    .qc-overview-body { flex: 1; min-width: 0; }
+    .qc-overview-title {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 6px;
+    }
+    .qc-overview-title h3 { font-size: 14px; font-weight: 700; margin: 0; }
+    .qc-verdict-pill {
+        font-size: 12px;
+        font-weight: 600;
+        padding: 3px 10px;
+        border-radius: 999px;
+        background: var(--bg-light);
+        border: 1px solid var(--border-color);
+    }
+    .qc-overview-text { font-size: 13px; color: var(--text-secondary); margin: 0; line-height: 1.45; }
+
+    /* 首屏：核心网络区块去掉外层 section 内边距对 vitals 的额外留白 */
+    #core-network .section-content { padding: 10px 12px; }
+
+    .qc-vitals {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 10px;
+        margin-bottom: 0;
+    }
+    .qc-vital {
+        border: 1px solid var(--border-color);
+        border-radius: var(--radius-sm);
+        padding: 10px 12px;
+        background: var(--bg-light);
+    }
+    .qc-vital-label {
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: var(--text-secondary);
+        margin-bottom: 8px;
+    }
+    .qc-vital-main {
+        font-size: 15px;
+        font-weight: 700;
+        color: var(--text-primary);
+        word-break: break-all;
+        margin-bottom: 6px;
+    }
+    .qc-vital-meta { font-size: 12px; color: var(--text-secondary); margin-bottom: 8px; }
+    .qc-vital-state { font-size: 12px; font-weight: 600; }
+    .qc-ok { color: var(--color-success); }
+    .qc-warn { color: var(--color-warning); }
+    .qc-fail { color: var(--color-critical); }
+
+    .qc-mini-list { list-style: none; margin: 0; padding: 0; font-size: 12px; }
+    .qc-mini-list li {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        padding: 4px 0;
+        border-bottom: 1px dashed var(--border-color);
+        font-family: var(--font-mono);
+    }
+    .qc-mini-list li:last-child { border-bottom: none; }
+
+    #env-business .section-content { padding: 10px 12px; }
+
+    .qc-stack {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+    }
+    .qc-card {
+        border: 1px solid var(--border-color);
+        border-radius: var(--radius-sm);
+        overflow: hidden;
+        background: var(--bg-light);
+    }
+    .qc-card-head {
+        padding: 8px 12px;
+        background: var(--bg-white);
+        border-bottom: 1px solid var(--border-color);
+        font-weight: 600;
+        font-size: 13px;
+    }
+    .qc-card-body { padding: 10px 12px; }
+
+    .qc-kv {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 9px 0;
+        border-bottom: 1px dashed var(--border-color);
+        font-size: 14px;
+    }
+    .qc-kv:last-child { border-bottom: none; }
+    .qc-pill {
+        font-size: 12px;
+        font-weight: 600;
+        padding: 3px 9px;
+        border-radius: var(--radius-sm);
+    }
+    .qc-pill-ok { background: #d1fae5; color: #065f46; }
+    .qc-pill-bad { background: #fee2e2; color: #991b1b; }
+    .qc-pill-neutral { background: var(--bg-light); color: var(--text-secondary); }
+    .qc-pill-info { background: #dbeafe; color: #1e40af; }
+
+    .qc-target {
+        padding: 10px 0;
+        border-bottom: 1px solid var(--bg-light);
+    }
+    .qc-target:last-child { border-bottom: none; }
+    .qc-target-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 12px;
+    }
+    .qc-target-name { font-weight: 600; font-size: 14px; }
+    .qc-target-sub { font-size: 12px; color: var(--text-secondary); margin-top: 2px; }
+    .qc-target-r { text-align: right; flex-shrink: 0; }
+    .qc-target-metric { font-size: 11px; color: var(--text-muted); font-family: var(--font-mono); margin-top: 3px; }
+    .qc-target-path {
+        margin-top: 8px;
+        padding: 8px 10px;
+        background: var(--bg-white);
+        border: 1px solid var(--border-color);
+        border-radius: var(--radius-sm);
+        font-size: 12px;
+        color: var(--text-secondary);
+        line-height: 1.5;
+    }
+    .qc-target-path-line { margin: 2px 0; }
+    .qc-target-path-line strong { color: var(--text-primary); font-weight: 600; margin-right: 4px; }
+    .qc-target-hops {
+        width: 100%;
+        margin-top: 6px;
+        font-size: 11px;
+        border-collapse: collapse;
+    }
+    .qc-target-hops th,
+    .qc-target-hops td {
+        padding: 4px 8px;
+        border-bottom: 1px solid var(--bg-light);
+        text-align: left;
+    }
+    .qc-target-hops th { color: var(--text-muted); font-weight: 600; }
+
+    .qc-route-summary {
+        font-size: 12px;
+        padding: 6px 10px;
+        border-radius: var(--radius-sm);
+        margin-bottom: 10px;
+        line-height: 1.45;
+        border: 1px solid var(--border-color);
+    }
+    .qc-route-summary.ok { background: #ecfdf5; }
+    .qc-route-summary.warn { background: #fffbeb; }
+
+    .qc-subhead {
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--text-primary);
+        margin: 20px 0 10px;
+        padding-left: 10px;
+        border-left: 3px solid var(--color-info);
+    }
+    .qc-subhead:first-child { margin-top: 0; }
+    .qc-subhead-muted { border-left-color: #d1d5db; color: var(--text-secondary); }
+
+    .qc-iface-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+        gap: 12px;
+        margin-bottom: 12px;
+    }
+    .qc-iface {
+        border: 1px solid var(--border-color);
+        border-radius: var(--radius-md);
+        padding: 12px;
+        background: var(--bg-white);
+    }
+    .qc-iface-top {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        padding-bottom: 8px;
+        margin-bottom: 8px;
+        border-bottom: 1px solid var(--bg-light);
+    }
+    .qc-iface-name { font-weight: 700; font-size: 14px; }
+    .qc-iface-mac { font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); }
+    .qc-iface-line { font-size: 13px; line-height: 1.7; color: #374151; }
+    .qc-iface-line strong { color: var(--text-secondary); font-weight: 600; margin-right: 6px; }
+    .qc-mark-primary {
+        display: inline-block;
+        font-size: 10px;
+        font-weight: 600;
+        color: #fff;
+        background: var(--color-critical);
+        padding: 1px 6px;
+        border-radius: 3px;
+        margin-left: 6px;
+        vertical-align: middle;
+    }
+
+    .qc-table-wrap { overflow-x: auto; margin-top: 8px; }
+    .qc-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+        background: var(--bg-white);
+        border: 1px solid var(--border-color);
+        border-radius: var(--radius-md);
+        overflow: hidden;
+    }
+    .qc-table th {
+        text-align: left;
+        padding: 9px 12px;
+        background: var(--bg-light);
+        color: var(--text-secondary);
+        font-weight: 600;
+        border-bottom: 1px solid var(--border-color);
+    }
+    .qc-table td {
+        padding: 9px 12px;
+        border-bottom: 1px solid var(--bg-light);
+        vertical-align: top;
+    }
+    .qc-table tr:last-child td { border-bottom: none; }
+    .qc-table .mono { font-family: var(--font-mono); font-size: 12px; }
+    .qc-row-default { background: #fff5f5; }
+
+    .qc-finding {
+        padding: 12px 14px;
+        border-radius: var(--radius-sm);
+        border-left: 4px solid var(--color-critical);
+        background: #fef2f2;
+        margin-bottom: 10px;
+        font-size: 14px;
+    }
+    .qc-finding.warn { border-left-color: var(--color-warning); background: #fffbeb; }
+    .qc-finding-detail { margin-top: 6px; font-size: 13px; color: var(--text-secondary); white-space: pre-line; }
+
+    .qc-inactive-list {
+        background: var(--bg-light);
+        border-radius: var(--radius-md);
+        padding: 8px 12px;
+        font-size: 12px;
+    }
+    .qc-inactive-row {
+        display: flex;
+        justify-content: space-between;
+        padding: 5px 0;
+        border-bottom: 1px dashed var(--border-color);
+    }
+    .qc-inactive-row:last-child { border-bottom: none; }
+
+    .qc-footer-note {
+        text-align: center;
+        font-size: 12px;
+        color: var(--text-muted);
+        margin-top: 32px;
+        padding-top: 18px;
+        border-top: 1px solid var(--border-color);
+    }
+
+    @media (max-width: 768px) {
+        .qc-vitals { grid-template-columns: 1fr; }
+    }
+    @media print {
+        body { background: #fff; }
+        .qc-card, .qc-vital { break-inside: avoid; }
+    }
+</style>
+{% endblock %}
+
 {% block content %}
-<!-- 报告头部 -->
+{% set verdict = executive_summary.verdict %}
+{% set overview_class = 'ok' if verdict == '正常' else ('bad' if verdict == '需处理' else 'warn') %}
+{% set overview_icon = '🟢' if verdict == '正常' else ('🔴' if verdict == '需处理' else '🟡') %}
+{% set primary_gw = system_info.ip_config.gateway if system_info and system_info.ip_config else (connectivity.gateway_ip if connectivity else '—') %}
+
+<!-- 报告头 -->
 <div class="header">
     <h1>🔍 SD-WAN 一键体检报告</h1>
-    <div class="meta-info">
-        <div class="meta-item">
-            <div class="meta-label">报告 ID</div>
-            <div class="meta-value">{{ report_id }}</div>
-        </div>
-        <div class="meta-item">
-            <div class="meta-label">Trace ID</div>
-            <div class="meta-value">{{ trace_id }}</div>
-        </div>
-        <div class="meta-item">
-            <div class="meta-label">生成时间</div>
-            <div class="meta-value">{{ generated_at }}</div>
-        </div>
-        <div class="meta-item">
-            <div class="meta-label">诊断类型</div>
-            <div class="meta-value">{{ diagnosis_type }}</div>
-        </div>
-        <div class="meta-item">
-            <div class="meta-label">规则版本</div>
-            <div class="meta-value">{{ rule_version }}</div>
-        </div>
+    <div class="meta-info meta-info--five">
+        <div class="meta-item"><div class="meta-label">报告 ID</div><div class="meta-value">{{ report_id }}</div></div>
+        <div class="meta-item"><div class="meta-label">Trace ID</div><div class="meta-value">{{ trace_id }}</div></div>
+        <div class="meta-item"><div class="meta-label">生成时间</div><div class="meta-value">{{ generated_at }}</div></div>
+        <div class="meta-item"><div class="meta-label">诊断类型</div><div class="meta-value">{{ diagnosis_type }}</div></div>
+        <div class="meta-item"><div class="meta-label">规则版本</div><div class="meta-value">{{ rule_version }}</div></div>
     </div>
 </div>
 
-<!-- 快速导航栏 -->
-<div class="quick-nav">
-    <span class="quick-nav-title">📑 快速导航:</span>
-    {% if root_causes and root_causes|length > 0 %}
-    <a href="#root-causes" class="nav-chip critical">🔴 根因分析 ({{ root_causes|length }})</a>
+<nav class="quick-nav" aria-label="报告导航">
+    <span class="quick-nav-title">📑 快速导航</span>
+    <a href="#core-network" class="nav-chip">核心网络</a>
+    {% if system_info and (system_info.adapters or system_info.routes or system_info.default_routes) %}
+    <a href="#network-config" class="nav-chip">网络配置</a>
     {% endif %}
-    {% if connectivity %}
-    <a href="#connectivity" class="nav-chip">🔍 连通性测试</a>
-    {% endif %}
-    {% if connectivity.cpe_link_routing %}
-    <a href="#network-probes" class="nav-chip">🌐 网络探测</a>
-    {% endif %}
-    {% if system_info %}
-    <a href="#system-info" class="nav-chip">💻 系统环境</a>
+    <a href="#env-business" class="nav-chip">环境与业务</a>
+    <a href="#findings" class="nav-chip{% if root_causes %} critical{% endif %}">问题建议</a>
+    {% if evidence_sections %}
+    <a href="#evidences" class="nav-chip">证据附录</a>
     {% endif %}
     {% if report_pack is defined and report_pack %}
-    <a href="#report-product-scope" class="nav-chip">📋 报告定位</a>
+    <a href="#report-product-scope" class="nav-chip">报告定位</a>
     {% endif %}
+</nav>
+
+<!-- 环境概览（一句话 + 结论，不重复罗列根因标题） -->
+<div class="qc-overview {{ overview_class }}">
+    <div class="qc-overview-icon">{{ overview_icon }}</div>
+    <div class="qc-overview-body">
+        <div class="qc-overview-title">
+            <h3>环境概览</h3>
+            <span class="qc-verdict-pill">{{ verdict }}</span>
+        </div>
+        <p class="qc-overview-text">{{ summary }}</p>
+    </div>
 </div>
 
-<!-- 执行摘要 -->
-<div class="section" id="summary">
+<!-- 一、核心网络 -->
+<section class="section" id="core-network">
     <div class="section-header">
-        <h2>📊 执行摘要</h2>
+        <h2>📡 核心网络</h2>
     </div>
     <div class="section-content">
-        <div class="summary-box {% if executive_summary.verdict == '需处理' %}error{% elif executive_summary.verdict == '需关注' %}warning{% else %}success{% endif %}">
-            <p style="font-size: 1.15em; margin-bottom: 12px;">
-                <strong>总体结论：</strong>{{ summary }}
-                <span class="tag tag-domestic" style="margin-left: 8px;">{{ executive_summary.verdict }}</span>
-            </p>
-            <div class="summary-stat-grid">
-                <div class="summary-stat-item"><div class="summary-stat-label">健康评分</div><div class="summary-stat-value">{{ executive_summary.health_score }}/100</div></div>
-                <div class="summary-stat-item"><div class="summary-stat-label">规则异常</div><div class="summary-stat-value">{{ executive_summary.issue_count }} 项</div></div>
-                <div class="summary-stat-item"><div class="summary-stat-label">网关</div><div class="summary-stat-value">{{ '✅' if executive_summary.gateway_ok else '❌' }} {{ executive_summary.gateway_ip }}</div></div>
-                <div class="summary-stat-item"><div class="summary-stat-label">DNS</div><div class="summary-stat-value">{{ executive_summary.dns_ok }}/{{ executive_summary.dns_total }} 正常</div></div>
-                <div class="summary-stat-item"><div class="summary-stat-label">国内/国际</div><div class="summary-stat-value">{{ executive_summary.domestic_success_rate }}% / {{ executive_summary.international_success_rate }}%</div></div>
-                <div class="summary-stat-item"><div class="summary-stat-label">业务探针</div><div class="summary-stat-value">{{ executive_summary.probe_ok }}/{{ executive_summary.probe_total }} 可达</div></div>
+        <div class="qc-vitals">
+            <div class="qc-vital">
+                <div class="qc-vital-label">默认网关</div>
+                <div class="qc-vital-main">{{ connectivity.gateway_ip if connectivity else executive_summary.gateway_ip }}</div>
+                {% if connectivity and connectivity.gateway_rtt > 0 %}
+                <div class="qc-vital-meta">
+                    RTT {{ "%.1f"|format(connectivity.gateway_rtt) }} ms
+                    {% if connectivity.gateway_loss_rate is defined %} · 丢包 {{ "%.1f"|format(connectivity.gateway_loss_rate * 100) }}%{% endif %}
+                </div>
+                {% endif %}
+                <div class="qc-vital-state {% if executive_summary.gateway_ok %}qc-ok{% elif connectivity and connectivity.gateway_status == 'packet_loss' %}qc-warn{% else %}qc-fail{% endif %}">
+                    {% if executive_summary.gateway_ok %}✅ 连通{% elif connectivity and connectivity.gateway_status == 'packet_loss' %}⚠️ 丢包{% else %}❌ 不可达{% endif %}
+                </div>
             </div>
-            {% if executive_summary.failed_probes %}
-            <div class="summary-priority-block" style="margin-top: 12px;">
-                <div class="summary-priority-title">探测失败目标</div>
-                <ul class="summary-priority-list">
-                    {% for p in executive_summary.failed_probes %}
-                    <li><span class="font-mono">{{ p.host }}</span>（{{ p.category }}）不可达</li>
-                    {% endfor %}
-                </ul>
-            </div>
-            {% endif %}
-            {% if executive_summary.priority_actions %}
-            <div class="summary-priority-block">
-                <div class="summary-priority-title">优先处置</div>
-                <ol class="summary-priority-list">{% for action in executive_summary.priority_actions %}<li>{{ action }}</li>{% endfor %}</ol>
-            </div>
-            {% endif %}
-            <div class="confidence-meter-container" style="margin-top: 16px;">
-                <span class="confidence-label">综合置信度:</span>
-                <div class="confidence-meter"><div class="confidence-fill" style="width: {{ confidence }}%"></div></div>
-                <span class="confidence-value">{{ confidence }}%</span>
-            </div>
-        </div>
-    </div>
-</div>
 
-<!-- 连通性状态 -->
-{% if connectivity %}
-<div class="section" id="connectivity">
-    <div class="section-header collapsible collapsed">
-        <h2>🔍 连通性测试</h2>
-    </div>
-    <div class="section-content collapse-content hidden">
-        <!-- 网关状态卡片 -->
-        <div class="card">
-            <div class="card-header">
-                <div class="card-title">网关连通性</div>
-                <span class="status-indicator {% if connectivity.gateway_status == 'ok' %}status-ok{% elif connectivity.gateway_status == 'packet_loss' %}status-warning{% else %}status-error{% endif %}">
-                    {% if connectivity.gateway_status == 'ok' %}✅{% elif connectivity.gateway_status == 'packet_loss' %}⚠️{% else %}❌{% endif %}
-                    {{ '正常' if connectivity.gateway_status == 'ok' else ('丢包' if connectivity.gateway_status == 'packet_loss' else '不可达') }}
-                </span>
-            </div>
-            <table>
-                <tr>
-                    <td><strong>网关地址</strong></td>
-                    <td class="font-mono">{{ connectivity.gateway_ip }}</td>
-                </tr>
-                <tr>
-                    <td><strong>往返延迟 (RTT)</strong></td>
-                    <td>{{ "%.1f"|format(connectivity.gateway_rtt) if connectivity.gateway_rtt > 0 else 'N/A' }} ms</td>
-                </tr>
-                <tr>
-                    <td><strong>丢包率</strong></td>
-                    <td>
-                        <span class="{% if connectivity.gateway_loss_rate == 0 %}status-ok{% elif connectivity.gateway_loss_rate < 0.05 %}status-warning{% else %}status-error{% endif %}" style="padding: 4px 10px; border-radius: 12px; display: inline-block;">
-                            {{ "%.1f"|format(connectivity.gateway_loss_rate * 100) }}%
-                        </span>
-                    </td>
-                </tr>
-            </table>
-        </div>
-
-        <!-- ✅ DNS服务器连通性测试 -->
-        {% if connectivity.dns_results %}
-        <div class="card mt-20">
-            <div class="card-header">
-                <div class="card-title">🔍 DNS服务器连通性测试</div>
-                <span class="status-indicator status-ok">✅ 测试完成</span>
-            </div>
-            <div class="card-description">
-                检测本地配置的DNS服务器的响应时间和可用性，确保DNS解析服务正常工作。
-            </div>
-            <table>
-                <thead>
-                    <tr>
-                        <th>DNS服务器</th>
-                        <th>状态</th>
-                        <th>响应时间 (RTT)</th>
-                    </tr>
-                </thead>
-                <tbody>
+            <div class="qc-vital">
+                <div class="qc-vital-label">DNS</div>
+                {% if connectivity and connectivity.dns_results %}
+                <ul class="qc-mini-list">
                     {% for dns in connectivity.dns_results %}
-                    <tr>
-                        <td><strong>{{ dns.server }}</strong></td>
-                        <td>
-                            <span class="tag {% if dns.success %}tag-domestic{% else %}tag-international{% endif %}">
-                                {{ '✅ 响应正常' if dns.success else '❌ 超时/失败' }}
-                            </span>
-                        </td>
-                        <td>
-                            {% if dns.success and dns.rtt > 0 %}
-                                {{ "%.0f"|format(dns.rtt) }} ms
-                            {% else %}
-                                -
-                            {% endif %}
-                        </td>
-                    </tr>
+                    <li>
+                        <span>{{ dns.server }}</span>
+                        <span class="{% if dns.success %}qc-ok{% else %}qc-fail{% endif %}">
+                            {% if dns.success and dns.rtt > 0 %}{{ "%.0f"|format(dns.rtt) }} ms{% elif dns.success %}OK{% else %}失败{% endif %}
+                        </span>
+                    </li>
                     {% endfor %}
-                </tbody>
-            </table>
-        </div>
-        {% endif %}
-
-        <!-- 互联网目标探测 -->
-        {% if connectivity.internet_targets %}
-        <div class="card mt-20">
-            <div class="card-header">
-                <div class="card-title">互联网可达性</div>
-            </div>
-            <table>
-                <thead>
-                    <tr>
-                        <th>目标主机</th>
-                        <th>分类</th>
-                        <th>状态</th>
-                        <th>RTT</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for target in connectivity.internet_targets %}
-                    <tr>
-                        <td><strong>{{ target.host }}</strong></td>
-                        <td>
-                            <span class="tag {% if target.category == 'domestic' %}tag-domestic{% else %}tag-international{% endif %}">
-                                {{ '🇨🇳 国内' if target.category == 'domestic' else '🌍 国际' }}
-                            </span>
-                        </td>
-                        <td>
-                            <span class="status-indicator {% if target.success %}status-ok{% else %}status-error{% endif %}">
-                                {{ '✅ 可达' if target.success else '❌ 不可达' }}
-                            </span>
-                        </td>
-                        <td>{{ "%.1f"|format(target.rtt) if target.rtt > 0 else 'N/A' }} ms</td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-            
-            <!-- 成功率统计 -->
-            <div class="info-box info mt-20">
-                <div class="info-box-title">📈 成功率统计</div>
-                <div class="info-box-content">
-                    <div class="flex-center" style="margin-bottom: 10px;">
-                        <strong>国内目标:</strong>
-                        <div class="progress-bar" style="flex: 1; margin-left: 10px;">
-                            <div class="progress-fill" style="width: {{ connectivity.domestic_success_rate }}%"></div>
-                        </div>
-                        <span style="margin-left: 10px; font-weight: 600;">{{ connectivity.domestic_success_rate }}%</span>
-                    </div>
-                    <div class="flex-center">
-                        <strong>国际目标:</strong>
-                        <div class="progress-bar" style="flex: 1; margin-left: 10px;">
-                            <div class="progress-fill" style="width: {{ connectivity.international_success_rate }}%"></div>
-                        </div>
-                        <span style="margin-left: 10px; font-weight: 600;">{{ connectivity.international_success_rate }}%</span>
-                    </div>
-                </div>
-            </div>
-        </div>
-        {% endif %}
-
-    </div>
-</div>
-{% endif %}
-
-<!-- 网络探测 -->
-{% if connectivity.cpe_link_routing %}
-<div class="section" id="network-probes">
-    <div class="section-header collapsible collapsed">
-        <h2>🌐 网络探测</h2>
-    </div>
-    <div class="section-content collapse-content hidden">
-        <div class="card">
-
-            <div class="card-header">
-                <div class="card-title">🛣️ 业务路径路由追踪</div>
-                <span class="badge-count badge-link">{{ connectivity.cpe_link_routing.link_distribution|length }} 条路径</span>
-            </div>
-            <div class="card-description">
-                通过Traceroute追踪访问不同目标域名的完整网络路径，分析流量出口和中间节点，验证网络路径是否符合预期。
-            </div>
-            
-            <!-- 检测结果摘要 -->
-            <div class="info-box {% if connectivity.cpe_link_routing.is_multi_link %}warning{% else %}success{% endif %}">
-                <div class="info-box-title">
-                    {% if connectivity.cpe_link_routing.is_multi_link %}
-                    ⚠️ 检测到多路径路由
-                    {% else %}
-                    ✅ 单路径出口
-                    {% endif %}
-                </div>
-                <div class="info-box-content">
-                    {% if connectivity.cpe_link_routing.is_multi_link %}
-                    发现 <strong>{{ connectivity.cpe_link_routing.multi_link_count }}</strong> 条不同的网络路径，表明系统根据目标地址进行了策略路由分流。
-                    {% else %}
-                    所有测试域名使用相同的出口链路，未检测到分流行为。
-                    {% endif %}
-                </div>
-            </div>
-
-            <!-- 路径分布详情 -->
-            {% if connectivity.cpe_link_routing.link_distribution %}
-            <div class="mt-20">
-                <h4 style="margin-bottom: 10px;">📊 路径分布</h4>
-                <table>
-                    <thead>
-                        <tr>
-                            <th>路径指纹</th>
-                            <th>经过域名</th>
-                            <th>跳数</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {% for fingerprint, domains in connectivity.cpe_link_routing.link_distribution.items() %}
-                        <tr>
-                            <td class="font-mono" style="font-size: 0.85em; word-break: break-all;">
-                                {{ fingerprint }}
-                            </td>
-                            <td>
-                                {% for domain in domains[:3] %}
-                                <span class="tag tag-unknown" style="margin: 2px;">{{ domain }}</span>
-                                {% endfor %}
-                                {% if domains|length > 3 %}
-                                <span class="tag tag-unknown" style="margin: 2px;">+{{ domains|length - 3 }} 更多</span>
-                                {% endif %}
-                            </td>
-                            <td>{{ domains|length }}</td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
-            </div>
-            {% endif %}
-
-            <!-- 详细路径分析 -->
-            {% if connectivity.cpe_link_routing.domain_results %}
-            <div class="mt-20">
-                <h4 style="margin-bottom: 10px;">🔍 详细路径分析</h4>
-                {% for dr in connectivity.cpe_link_routing.domain_results[:5] %}
-                <details class="collapse-panel" style="margin-bottom: 10px;">
-                    <summary class="collapse-header">
-                        <strong>{{ dr.domain }}</strong>
-                        
-                        <!-- 根据链路类型显示不同状态标签 -->
-                        {% if dr.link_category == "unreachable" %}
-                            <span class="tag tag-error" style="margin-left: 10px;">❌ 不可达</span>
-                        {% elif dr.link_category == "limited" %}
-                            <span class="tag tag-warning" style="margin-left: 10px;">⚠️ 路径受限</span>
-                        {% elif dr.link_category == "error" %}
-                            <span class="tag tag-error" style="margin-left: 10px;">🔧 探测异常</span>
-                        {% else %}
-                            <span class="tag tag-success" style="margin-left: 10px;">✅ {{ dr.full_path|length }} 跳</span>
-                        {% endif %}
-                    </summary>
-                    <div class="collapse-content" style="padding: 15px;">
-                        {% if dr.resolved_ip and 'DNS' not in dr.resolved_ip and '异常' not in dr.resolved_ip %}
-                            <p style="margin-bottom: 10px;"><strong>解析IP：</strong>{{ dr.resolved_ip }}</p>
-                        {% endif %}
-                        
-                        {% if dr.link_category == "unreachable" %}
-                            <!-- 网络不可达状态（通过TCPing快速判断） -->
-                            <div class="info-box error">
-                                <div class="info-box-title">⚠️ 目标不可达</div>
-                                <p><strong>检测结果：</strong>{{ dr.path_fingerprint }}</p>
-                                <p><strong>说明：</strong>TCP端口测试（443/80）显示目标不可达，因此跳过耗时的Traceroute追踪以节省时间。</p>
-                                <p style="color: #666; font-size: 0.9em;"><strong>优化策略：</strong>使用轻量级TCPing测试（2-10秒）快速判断可达性，优先测试HTTPS(443)和HTTP(80)端口，避免对不可达目标执行完整的Traceroute（15-30秒）。相比ICMP Ping，TCPing更可靠，因为防火墙很少阻止Web服务端口。</p>
-                            </div>
-                            
-                        {% elif dr.link_category == "limited" %}
-                            <!-- 路径受限状态 -->
-                            <div class="info-box warning">
-                                <div class="info-box-title">⚠️ 路径部分受限</div>
-                                {% if dr.resolved_ip and 'DNS' not in dr.resolved_ip %}
-                                    <p><strong>解析IP：</strong>{{ dr.resolved_ip }}</p>
-                                {% endif %}
-                                <p><strong>路径指纹：</strong><code>{{ dr.path_fingerprint }}</code></p>
-                                <p><strong>说明：</strong>仅部分路由节点响应，可能存在防火墙限制或网络拥塞。</p>
-                            </div>
-                            
-                            <!-- 仍显示有限的跳点信息 -->
-                            {% if dr.full_path %}
-                            <table>
-                                <thead>
-                                    <tr>
-                                        <th>跳数</th>
-                                        <th>IP地址</th>
-                                        <th>延迟</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {% for hop in dr.full_path %}
-                                    <tr style="{% if hop.is_timeout %}background: #fff3cd;{% endif %}">
-                                        <td>{{ hop.hop_number }}</td>
-                                        <td class="font-mono">
-                                            {% if hop.is_timeout and not hop.ip_addresses %}
-                                                <!-- ✅ 超时跳点：显示星号和提示 -->
-                                                <span style="color: #856404;">* (请求超时)</span><br/>
-                                            {% else %}
-                                                <!-- 正常跳点：显示IP和hostname -->
-                                                {% for ip in hop.ip_addresses %}
-                                                {{ ip }}
-                                                {% if hop.hostnames and loop.index0 < hop.hostnames|length and hop.hostnames[loop.index0] %}
-                                                    <br/><small style="color: #6c757d;">({{ hop.hostnames[loop.index0] }})</small>
-                                                {% endif %}
-                                                <br/>
-                                                {% endfor %}
-                                            {% endif %}
-                                        </td>
-                                        <td>
-                                            {% if hop.is_timeout and not hop.rtts %}
-                                                <!-- ✅ 超时跳点：显示横杠 -->
-                                                <span style="color: #856404;">-</span><br/>
-                                            {% else %}
-                                                <!-- 正常跳点：显示延迟 -->
-                                                {% for rtt in hop.rtts[:3] %}
-                                                {{ "%.1f"|format(rtt) }} ms<br/>
-                                                {% endfor %}
-                                            {% endif %}
-                                        </td>
-                                    </tr>
-                                    {% endfor %}
-                                </tbody>
-                            </table>
-                            {% endif %}
-                            
-                        {% elif dr.link_category == "error" %}
-                            <!-- 探测异常状态 -->
-                            <div class="info-box error">
-                                <div class="info-box-title">🔧 Traceroute探测异常</div>
-                                <p><strong>错误信息：</strong>{{ dr.path_fingerprint }}</p>
-                                <p><strong>说明：</strong>Traceroute执行过程中发生异常，无法获取路径信息。</p>
-                            </div>
-                            
-                        {% else %}
-                            <!-- 正常可达状态，显示完整Traceroute表格 -->
-                            <table>
-                                <thead>
-                                    <tr>
-                                        <th>跳数</th>
-                                        <th>IP地址</th>
-                                        <th>延迟</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {% for hop in dr.full_path %}
-                                    <tr style="{% if hop.is_timeout %}background: #fff3cd;{% endif %}">
-                                        <td>{{ hop.hop_number }}</td>
-                                        <td class="font-mono">
-                                            {% if hop.is_timeout and not hop.ip_addresses %}
-                                                <!-- ✅ 超时跳点：显示星号和提示 -->
-                                                <span style="color: #856404;">* (请求超时)</span><br/>
-                                            {% else %}
-                                                <!-- 正常跳点：显示IP和hostname -->
-                                                {% for ip in hop.ip_addresses %}
-                                                {{ ip }}
-                                                {% if hop.hostnames and loop.index0 < hop.hostnames|length and hop.hostnames[loop.index0] %}
-                                                    <br/><small style="color: #6c757d;">({{ hop.hostnames[loop.index0] }})</small>
-                                                {% endif %}
-                                                <br/>
-                                                {% endfor %}
-                                            {% endif %}
-                                        </td>
-                                        <td>
-                                            {% if hop.is_timeout and not hop.rtts %}
-                                                <!-- ✅ 超时跳点：显示横杠 -->
-                                                <span style="color: #856404;">-</span><br/>
-                                            {% else %}
-                                                <!-- 正常跳点：显示延迟 -->
-                                                {% for rtt in hop.rtts[:3] %}
-                                                {{ "%.1f"|format(rtt) }} ms<br/>
-                                                {% endfor %}
-                                            {% endif %}
-                                        </td>
-                                    </tr>
-                                    {% endfor %}
-                                </tbody>
-                            </table>
-                            
-                            <div style="margin-top: 10px; padding: 10px; background: #f8f9fa; border-radius: 4px;">
-                                <strong>路径指纹：</strong><code>{{ dr.path_fingerprint }}</code><br/>
-                                <strong>链路类型：</strong>{{ dr.link_category }}<br/>
-                                <strong>置信度：</strong>
-                                <div class="progress-bar" style="width: 200px; display: inline-block; margin-left: 10px;">
-                                    <div class="progress-fill" style="width: {{ (dr.confidence * 100)|int }}%;"></div>
-                                </div>
-                                {{ "%.0f"|format(dr.confidence * 100) }}%
-                            </div>
-                        {% endif %}
-                    </div>
-                </details>
-                {% endfor %}
-            </div>
-            {% endif %}
-
-            <!-- 说明框 -->
-            <div class="info-box info mt-20">
-                <div class="info-box-title">💡 验证说明</div>
-                <ul style="margin: 0; padding-left: 20px; line-height: 1.8;">
-                    <li><strong>测试目的</strong>：验证业务流量是否按策略路由规则正确分流</li>
-                    <li><strong>检测方法</strong>：对多个目标域名执行Traceroute，对比网络路径指纹</li>
-                    <li><strong>路径指纹</strong>：提取Traceroute前N跳的IP序列作为路径标识</li>
-                    <li><strong>分流判定</strong>：不同域名经过不同路径则判定为"多路径路由"</li>
-                    <li><strong>应用场景</strong>：跨境加速、直播专线、办公/生产网隔离等策略路由验证</li>
                 </ul>
-            </div>
-        </div>
-    </div>
-</div>
-{% endif %}
-
-
-<!-- 系统环境信息 -->
-{% if system_info %}
-<div class="section" id="system-info">
-    <div class="section-header collapsible collapsed">
-        <h2>💻 系统环境信息</h2>
-    </div>
-    <div class="section-content collapse-content hidden">
-        <!-- 网卡配置 -->
-        <div class="card">
-            <div class="card-header">
-                <div class="card-title">网卡配置</div>
-                <span class="badge-count">{{ system_info.adapters|length }} 个网卡</span>
-            </div>
-            <table>
-                <thead>
-                    <tr>
-                        <th>网卡名称</th>
-                        <th>MAC 地址</th>
-                        <th>IP 地址</th>
-                        <th>默认网关</th>
-                        <th>连接状态</th>
-                        <th>速率</th>
-                        <th>配置方式</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for adapter in system_info.adapters %}
-                    <tr>
-                        <td><strong>{{ adapter.name }}</strong></td>
-                        <td class="font-mono">{{ adapter.mac }}</td>
-                        <td class="font-mono">
-                            {% if adapter.ips|length > 1 %}
-                                <!-- 多个IP地址，每行显示一个 -->
-                                <div style="line-height: 1.6;">
-                                    {% for ip in adapter.ips %}
-                                        <div>{{ ip }}</div>
-                                    {% endfor %}
-                                </div>
-                            {% else %}
-                                <!-- 单个IP地址 -->
-                                {{ adapter.ip_display }}
-                            {% endif %}
-                        </td>
-                        <td class="font-mono">{{ adapter.gateway or 'N/A' }}</td>
-                        <td>
-                            <span class="status-indicator {% if adapter.status == '已连接' %}status-ok{% else %}status-error{% endif %}">
-                                {{ adapter.status }}
-                            </span>
-                        </td>
-                        <td>{{ adapter.speed }}</td>
-                        <td>
-                            <span class="tag {% if adapter.dhcp == 'DHCP' %}tag-domestic{% else %}tag-international{% endif %}">
-                                {{ adapter.dhcp }}
-                            </span>
-                        </td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-
-        <!-- IP 与路由配置 -->
-        <div class="card mt-20">
-            <div class="card-header">
-                <div class="card-title">IP 与路由配置</div>
-                {% if system_info.default_route_count and system_info.default_route_count > 1 %}
-                <span class="status-indicator status-warning">⚠️ 检测到 {{ system_info.default_route_count }} 条默认路由</span>
+                <div class="qc-vital-state {% if executive_summary.dns_total == 0 %}qc-warn{% elif executive_summary.dns_ok == executive_summary.dns_total %}qc-ok{% elif executive_summary.dns_ok > 0 %}qc-warn{% else %}qc-fail{% endif %}">
+                    {{ executive_summary.dns_ok }}/{{ executive_summary.dns_total }} 台可用
+                </div>
+                {% else %}
+                <div class="qc-vital-main" style="font-size:14px;">
+                    {% if system_info and system_info.ip_config and system_info.ip_config.dns_servers %}
+                    {{ system_info.ip_config.dns_servers }}
+                    {% else %}—{% endif %}
+                </div>
+                <div class="qc-vital-state {% if executive_summary.dns_total == 0 %}qc-warn{% elif executive_summary.dns_ok == executive_summary.dns_total %}qc-ok{% else %}qc-fail{% endif %}">
+                    {% if executive_summary.dns_total == 0 %}⚠️ 未配置{% elif executive_summary.dns_ok == executive_summary.dns_total %}✅ 正常{% else %}⚠️ 部分异常{% endif %}
+                </div>
                 {% endif %}
             </div>
-            <table>
-                <tr>
-                    <td style="width: 30%;"><strong>当前默认网关</strong></td>
-                    <td class="font-mono">
-                        {% set gws = system_info.ip_config.default_gateways %}
-                        {% if gws and gws|length > 1 %}
-                            <div style="line-height: 1.6;">
-                                {% for g in gws %}
-                                <div>
-                                    {{ g }}
-                                    {% if g == system_info.ip_config.gateway %}
-                                        <span class="tag tag-domestic" style="margin-left: 6px;">🚪 系统主默认</span>
-                                    {% endif %}
-                                </div>
-                                {% endfor %}
-                            </div>
-                            <div style="margin-top: 6px; color: var(--text-secondary); font-size: 0.85em;">
-                                共 {{ gws|length }} 个默认网关，详情见下方「关键路由表项」与「证据附录 → 默认路由清单」
-                            </div>
-                        {% else %}
-                            {{ system_info.ip_config.gateway or 'N/A' }}
-                        {% endif %}
-                    </td>
-                </tr>
-                <tr>
-                    <td><strong>DNS 服务器</strong></td>
-                    <td class="font-mono">{{ system_info.ip_config.dns_servers or 'N/A' }}</td>
-                </tr>
-            </table>
-        </div>
 
-        {% if system_info.ip_conflicts %}
-        <div class="card mt-20">
-            <div class="card-header">
-                <div class="card-title">IP 地址冲突（ARP）</div>
-                <span class="status-indicator status-warning">⚠️ 检测到冲突</span>
-            </div>
-            <div class="card-description">
-                同一 IP 在 ARP 表中出现多个不同 MAC，可能存在局域网 IP 冲突。
-            </div>
-            <table>
-                <thead>
-                    <tr>
-                        <th>冲突 IP</th>
-                        <th>MAC 地址</th>
-                        <th>接口</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for conflict in system_info.ip_conflicts %}
-                        {% for entry in conflict.entries %}
-                        <tr>
-                            {% if loop.first %}
-                            <td class="font-mono" rowspan="{{ conflict.entries|length }}"><strong>{{ conflict.ip }}</strong></td>
-                            {% endif %}
-                            <td class="font-mono">{{ entry.mac }}</td>
-                            <td>{{ entry.interface or '未知' }}</td>
-                        </tr>
-                        {% endfor %}
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-        {% endif %}
-
-        <!-- 关键路由表项 -->
-        {% if system_info.routes %}
-        <div class="card mt-20">
-            <div class="card-header">
-                <div class="card-title">关键路由表项</div>
-                <span class="badge-count">{{ system_info.routes|length }} 条</span>
-            </div>
-            <div class="card-description">
-                展示对网络连接至关重要的路由条目，包括默认路由、网关路由和DNS服务器路由。这些路由决定了流量的出口路径。
-            </div>
-            {% if system_info.default_route_count and system_info.default_route_count > 1 %}
-            <div class="info-box warning mt-20">
-                <div class="info-box-title">⚠️ 检测到 {{ system_info.default_route_count }} 条默认路由</div>
-                <div class="info-box-content">
-                    本表已展示**全部**默认路由（按 metric 升序），metric 最小者为系统首选出口；详细规则诊断见
-                    <a href="#root-causes">「根因分析」</a>，原始证据见
-                    <a href="#evidences">「证据附录 → 默认路由清单」</a>。
+            <div class="qc-vital">
+                <div class="qc-vital-label">缺省路由</div>
+                <div class="qc-vital-main">{{ system_info.default_route_count if system_info and system_info.default_route_count is defined else '—' }} 条</div>
+                {% if system_info and system_info.ip_config and system_info.ip_config.default_gateways %}
+                <div class="qc-vital-meta">{{ system_info.ip_config.default_gateways | join(' · ') }}</div>
+                {% elif primary_gw and primary_gw != 'N/A' %}
+                <div class="qc-vital-meta">网关 {{ primary_gw }}</div>
+                {% endif %}
+                <div class="qc-vital-state {% if system_info and system_info.default_route_count and system_info.default_route_count > 1 %}qc-warn{% else %}qc-ok{% endif %}">
+                    {% if system_info and system_info.default_route_count and system_info.default_route_count > 1 %}⚠️ 多条默认路由{% else %}✅ 已配置{% endif %}
                 </div>
             </div>
-            {% endif %}
-            <table>
+        </div>
+    </div>
+</section>
+
+<!-- 二、网络配置 -->
+{% if system_info and (system_info.adapters or system_info.routes or system_info.default_routes) %}
+<section class="section" id="network-config">
+    <div class="section-header">
+        <h2>💻 网络配置</h2>
+    </div>
+    <div class="section-content">
+        {% if system_info.adapters %}
+        <div class="qc-subhead">已连接接口</div>
+        <div class="qc-iface-grid">
+            {% for adapter in system_info.adapters if adapter.status == '已连接' %}
+            <div class="qc-iface">
+                <div class="qc-iface-top">
+                    <div>
+                        <div class="qc-iface-name">
+                            {{ adapter.name }}
+                            {% if adapter.gateway and adapter.gateway != 'N/A' and adapter.gateway == primary_gw %}
+                            <span class="qc-mark-primary">主网卡</span>
+                            {% endif %}
+                        </div>
+                        <div class="qc-target-sub">{{ adapter.dhcp }} · {{ adapter.speed }}</div>
+                    </div>
+                    <div class="qc-iface-mac">{{ adapter.mac }}</div>
+                </div>
+                <div class="qc-iface-line"><strong>IP</strong>
+                    {% for ip in adapter.ips %}{{ ip }}{% if not loop.last %}<br>{% endif %}{% endfor %}
+                </div>
+                <div class="qc-iface-line"><strong>网关</strong>{{ adapter.gateway or '无' }}</div>
+            </div>
+            {% endfor %}
+        </div>
+        {% set inactive = system_info.adapters | selectattr('status', 'ne', '已连接') | list %}
+        {% if inactive %}
+        <div class="qc-subhead qc-subhead-muted">未连接接口</div>
+        <div class="qc-inactive-list">
+            {% for adapter in inactive %}
+            <div class="qc-inactive-row">
+                <span>{{ adapter.name }}</span>
+                <span class="mono" style="color:var(--text-muted);">{{ adapter.status }}</span>
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+        {% endif %}
+
+        {% if system_info.routes %}
+        <div class="qc-subhead">关键路由表</div>
+        <p style="font-size:12px;color:var(--text-secondary);margin-bottom:8px;">默认路由、网关/DNS/静态等关键项；完整 raw 输出见证据附录。</p>
+        <div class="qc-table-wrap">
+            <table class="qc-table">
                 <thead>
                     <tr>
-                        <th>目标网络</th>
-                        <th>子网掩码</th>
-                        <th>下一跳网关</th>
-                        <th>接口</th>
-                        <th>Metric</th>
-                        <th>协议</th>
-                        <th>路由类型</th>
+                        <th>目标</th><th>掩码</th><th>网关</th><th>接口</th><th>Metric</th><th>类型</th>
                     </tr>
                 </thead>
                 <tbody>
                     {% for route in system_info.routes %}
-                    <tr {% if route.dest == '0.0.0.0' and route.mask == '0.0.0.0' %}style="background: #fff5f5;"{% endif %}>
-                        <td class="font-mono"><strong>{{ route.dest }}</strong></td>
-                        <td class="font-mono">{{ route.mask }}</td>
-                        <td class="font-mono">{{ route.gw or 'on-link' }}</td>
-                        <td class="font-mono" style="font-size: 0.9em;">{{ route.interface or 'N/A' }}</td>
+                    <tr class="{% if route.dest == '0.0.0.0' and route.mask == '0.0.0.0' %}qc-row-default{% endif %}">
+                        <td class="mono"><strong>{{ route.dest }}</strong></td>
+                        <td class="mono">{{ route.mask }}</td>
+                        <td class="mono">{{ route.gw or 'on-link' }}</td>
+                        <td class="mono">{{ route.interface or '—' }}</td>
                         <td>{{ route.metric }}</td>
-                        <td><span class="tag tag-unknown" style="font-size: 0.8em;">{{ route.protocol or 'N/A' }}</span></td>
                         <td>
                             {% if route.dest == '0.0.0.0' and route.mask == '0.0.0.0' %}
-                                <span class="tag" style="background: #dc3545; color: white;">🚪 默认路由</span>
+                            <span class="qc-pill qc-pill-bad">默认</span>
                             {% elif route.gw and (route.gw.startswith('192.168.') or route.gw.startswith('10.')) %}
-                                <span class="tag tag-domestic">🏠 网关路由</span>
-                            {% elif route.dest in ['8.8.8.8', '8.8.4.4', '114.114.114.114', '223.5.5.5', '1.1.1.1'] %}
-                                <span class="tag tag-international">🌐 DNS路由</span>
+                            <span class="qc-pill qc-pill-info">网关</span>
                             {% else %}
-                                <span class="tag tag-unknown">⚙️ 静态路由</span>
+                            <span class="qc-pill qc-pill-neutral">其他</span>
                             {% endif %}
                         </td>
                     </tr>
                     {% endfor %}
                 </tbody>
             </table>
-
-            <!-- 说明框 -->
-            <div class="info-box info mt-20">
-                <div class="info-box-title">💡 路由类型说明</div>
-                <ul style="margin: 0; padding-left: 20px; line-height: 1.8;">
-                    <li><strong>🚪 默认路由 (0.0.0.0/0)</strong>：所有未匹配其他路由的流量都通过此路由转发，是网络的"最后出口"。**多条默认路由时按 metric 升序排列，metric 最小者优先**。</li>
-                    <li><strong>🏠 网关路由</strong>：指向本地网关（通常是路由器或CPE设备）的路由，用于访问局域网或互联网</li>
-                    <li><strong>🌐 DNS路由</strong>：指向DNS服务器的专用路由，确保域名解析请求能正确到达</li>
-                    <li><strong>⚙️ 静态路由</strong>：管理员手动配置的策略路由，用于特定业务分流场景</li>
-                </ul>
-                <p style="margin-top: 10px; font-size: 0.9em; color: var(--text-secondary);">
-                    💡 <strong>提示</strong>：本表展示全部默认路由 + 关键网关/DNS/静态路由；完整路由表过长不在此列出，可结合「证据附录」查看。
-                </p>
-            </div>
         </div>
-        {% endif %}
-
-        <!-- 安全与代理 -->
-        <div class="card mt-20">
-            <div class="card-header">
-                <div class="card-title">安全与代理配置</div>
-            </div>
-            <table>
-                <tr>
-                    <td style="width: 30%;"><strong>防火墙状态</strong></td>
-                    <td>{{ system_info.firewall }}</td>
-                </tr>
-                <tr>
-                    <td><strong>代理状态</strong></td>
-                    <td>{{ system_info.proxy }}</td>
-                </tr>
-            </table>
-        </div>
-    </div>
-</div>
-{% endif %}
-
-<!-- 根因分析 -->
-{% if root_causes %}
-<div class="section" id="root-causes">
-    <div class="section-header collapsible">
-        <h2>🔴 根因分析</h2>
-        <span class="badge-count" style="background: var(--color-critical);">{{ root_causes | length }} 个问题</span>
-    </div>
-    <div class="section-content collapse-content">
-        {% for cause in root_causes %}
-        <div class="card" style="border-left: 4px solid {% if cause.severity.value == 'critical' %}var(--color-critical){% elif cause.severity.value == 'error' %}var(--color-error){% else %}var(--color-warning){% endif %};">
-            <div class="card-header">
-                <div class="card-title">[{{ cause.cause_id }}] {{ cause.title }}</div>
-                <span class="severity-badge severity-{{ cause.severity.value }}">{{ cause.severity.value | upper }}</span>
-            </div>
-            <div class="card-description font-mono" style="white-space: pre-line; font-size: 0.95em;">{{ cause.description }}</div>
-            {% if cause.current_value or cause.expected_value or cause.remediation %}
-            <table class="mt-20" style="font-size: 0.95em;">
+        {% elif system_info.default_routes %}
+        <div class="qc-subhead">缺省路由</div>
+        <div class="qc-table-wrap">
+            <table class="qc-table">
+                <thead><tr><th>目标</th><th>掩码</th><th>网关</th><th>接口</th><th>Metric</th></tr></thead>
                 <tbody>
-                    {% if cause.current_value %}<tr><td style="width:28%;font-weight:600;">当前值</td><td class="font-mono" style="white-space: pre-line;">{{ cause.current_value }}</td></tr>{% endif %}
-                    {% if cause.expected_value %}<tr><td style="font-weight:600;">合理值</td><td>{{ cause.expected_value }}</td></tr>{% endif %}
-                    {% if cause.remediation %}<tr><td style="font-weight:600;">处置建议</td><td>{{ cause.remediation }}</td></tr>{% endif %}
+                    {% for route in system_info.default_routes %}
+                    <tr>
+                        <td class="mono">{{ route.dest }}</td>
+                        <td class="mono">{{ route.mask }}</td>
+                        <td class="mono">{{ route.gw }}</td>
+                        <td class="mono">{{ route.interface or '—' }}</td>
+                        <td>{{ route.metric }}</td>
+                    </tr>
+                    {% endfor %}
                 </tbody>
             </table>
-            {% endif %}
-            {% if cause.evidence_refs %}
-            <div class="mt-20">
-                <div style="font-weight: 600; margin-bottom: 6px;">支撑证据</div>
-                <ul class="font-mono" style="margin: 0; padding-left: 20px; line-height: 1.7; font-size: 0.9em;">
-                    {% for ev in cause.evidence_refs %}
-                    <li style="white-space: pre-line;">{{ ev }}</li>
-                    {% endfor %}
-                </ul>
-                <div style="margin-top: 6px; color: var(--text-secondary); font-size: 0.85em;">
-                    详细原始数据见 <a href="#evidences">「证据附录」</a>。
-                </div>
-            </div>
-            {% endif %}
-            <div class="card-meta">
-                <div class="card-meta-item">
-                    <span class="card-meta-label">置信度:</span>
-                    <span>{{ (cause.confidence * 100) | int }}%</span>
-                </div>
-                <div class="card-meta-item">
-                    <span class="card-meta-label">匹配规则:</span>
-                    <span class="font-mono">{{ cause.matched_rules | join(', ') }}</span>
-                </div>
-            </div>
         </div>
-        {% endfor %}
+        {% endif %}
     </div>
-</div>
-{% else %}
-<div class="section">
-    <div class="section-content">
-        <div class="summary-box success">
-            <p style="font-size: 1.2em;">✅ 未发现明显网络配置问题。</p>
-            <p style="margin-top: 10px; color: var(--text-secondary);">系统运行正常，无需特殊操作。</p>
-        </div>
-    </div>
-</div>
+</section>
 {% endif %}
 
-<!-- 证据附录 -->
+<!-- 三、环境与业务 -->
+<section class="section" id="env-business">
+    <div class="section-header">
+        <h2>🌐 环境与业务可达性</h2>
+    </div>
+    <div class="section-content">
+        <div class="qc-stack">
+            <div class="qc-card">
+                <div class="qc-card-head">环境状态</div>
+                <div class="qc-card-body">
+                    {% set fw = system_info.firewall if system_info else '未知' %}
+                    <div class="qc-kv">
+                        <span>Windows 防火墙</span>
+                        <span class="qc-pill {% if fw == '关闭' %}qc-pill-ok{% elif fw == '开启' %}qc-pill-bad{% else %}qc-pill-neutral{% endif %}">{{ fw }}</span>
+                    </div>
+                    {% set px = system_info.proxy if system_info else '未知' %}
+                    <div class="qc-kv">
+                        <span>系统代理</span>
+                        <span class="qc-pill {% if px in ['未启用', '未开启'] %}qc-pill-ok{% elif px in ['启用', '已开启'] %}qc-pill-bad{% else %}qc-pill-neutral{% endif %}">{{ px }}</span>
+                    </div>
+                    {% if system_info and system_info.ip_conflicts %}
+                    <div class="qc-kv">
+                        <span>IP 地址冲突</span>
+                        <span class="qc-pill qc-pill-bad">{{ system_info.ip_conflicts | length }} 处</span>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+
+            <div class="qc-card">
+                <div class="qc-card-head">业务目标探测</div>
+                <div class="qc-card-body">
+                    {% if connectivity and connectivity.cpe_link_routing %}
+                    <div class="qc-route-summary {% if connectivity.cpe_link_routing.is_multi_link %}warn{% else %}ok{% endif %}">
+                        {% if connectivity.cpe_link_routing.is_multi_link %}
+                        路径出口：{{ connectivity.cpe_link_routing.multi_link_count }} 条分流 / {{ connectivity.cpe_link_routing.link_distribution|length }} 种指纹
+                        {% else %}
+                        路径出口：各域名 traceroute 指纹一致（单路径）
+                        {% endif %}
+                    </div>
+                    {% endif %}
+
+                    {% if connectivity and connectivity.internet_targets %}
+                    {% for target in connectivity.internet_targets %}
+                    <div class="qc-target">
+                        <div class="qc-target-row">
+                            <div>
+                                <div class="qc-target-name">{{ target.host }}</div>
+                                <div class="qc-target-sub">{{ '国内' if target.category == 'domestic' else '国际' }} · 连通性探测</div>
+                            </div>
+                            <div class="qc-target-r">
+                                <span class="qc-pill {% if target.success %}qc-pill-ok{% else %}qc-pill-bad{% endif %}">{{ '正常' if target.success else '异常' }}</span>
+                                <div class="qc-target-metric">
+                                    {% if target.success and target.rtt > 0 %}{{ "%.1f"|format(target.rtt) }} ms{% elif target.success %}可达{% else %}不通{% endif %}
+                                </div>
+                            </div>
+                        </div>
+                        {% if connectivity.cpe_link_routing and connectivity.cpe_link_routing.domain_results %}
+                        {% for dr in connectivity.cpe_link_routing.domain_results %}
+                        {% if dr.domain == target.host %}
+                        <div class="qc-target-path">
+                            <div class="qc-target-path-line">
+                                <strong>路径追踪</strong>
+                                {% if dr.link_category == 'unreachable' %}不可达
+                                {% elif dr.link_category == 'limited' %}路径受限
+                                {% elif dr.link_category == 'error' %}探测异常
+                                {% elif dr.full_path %}{{ dr.full_path|length }} 跳
+                                {% else %}{{ dr.link_category }}{% endif %}
+                            </div>
+                            {% if dr.resolved_ip and 'DNS' not in dr.resolved_ip and '异常' not in dr.resolved_ip %}
+                            <div class="qc-target-path-line"><strong>解析 IP</strong><span class="mono">{{ dr.resolved_ip }}</span></div>
+                            {% endif %}
+                            {% if dr.path_fingerprint %}
+                            <div class="qc-target-path-line"><strong>指纹</strong><code class="mono" title="{{ dr.path_fingerprint }}">{{ dr.path_fingerprint }}</code></div>
+                            {% endif %}
+                            {% if dr.full_path and dr.link_category not in ['unreachable', 'error'] %}
+                            <table class="qc-target-hops mono">
+                                <thead><tr><th>跳</th><th>节点</th><th>延迟</th></tr></thead>
+                                <tbody>
+                                    {% for hop in dr.full_path %}
+                                    <tr>
+                                        <td>{{ hop.hop_number }}</td>
+                                        <td>
+                                            {% if hop.is_timeout and not hop.ip_addresses %}* (超时)
+                                            {% else %}{% for ip in hop.ip_addresses %}{{ ip }}{% if not loop.last %}, {% endif %}{% endfor %}
+                                            {% endif %}
+                                        </td>
+                                        <td>
+                                            {% if hop.rtts %}{% for rtt in hop.rtts[:2] %}{{ "%.1f"|format(rtt) }}{% if not loop.last %}/{% endif %}{% endfor %} ms{% else %}—{% endif %}
+                                        </td>
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                            {% elif dr.link_category in ['unreachable', 'error', 'limited'] and dr.path_fingerprint %}
+                            <div class="qc-target-path-line" style="margin-top:4px;">{{ dr.path_fingerprint }}</div>
+                            {% endif %}
+                        </div>
+                        {% endif %}
+                        {% endfor %}
+                        {% endif %}
+                    </div>
+                    {% endfor %}
+                    {% else %}
+                    <p style="font-size:13px;color:var(--text-secondary);">暂无业务探测数据</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- 四、问题与建议 -->
+<section class="section" id="findings">
+    <div class="section-header">
+        <h2>📋 问题与建议</h2>
+        {% if root_causes %}<span class="badge-count" style="background:var(--color-critical);">{{ root_causes|length }}</span>{% endif %}
+    </div>
+    <div class="section-content">
+        {% if root_causes %}
+        {% for cause in root_causes %}
+        <div class="qc-finding {% if cause.severity.value == 'warning' %}warn{% endif %}">
+            <strong>[{{ cause.cause_id }}] {{ cause.title }}</strong>
+            {% if cause.current_value %}
+            <div class="qc-finding-detail">{{ cause.current_value }}</div>
+            {% endif %}
+            {% if cause.remediation %}
+            <div class="qc-finding-detail">💡 {{ cause.remediation }}</div>
+            {% endif %}
+            {% if cause.evidence_refs %}
+            <div class="qc-finding-detail" style="font-size:12px;">
+                证据：<a href="#evidences">附录</a> — {{ cause.evidence_refs[:2] | join('；') }}{% if cause.evidence_refs|length > 2 %} …{% endif %}
+            </div>
+            {% endif %}
+        </div>
+        {% endfor %}
+        {% elif executive_summary.priority_actions %}
+        <ul style="margin:0;padding-left:20px;font-size:14px;line-height:1.8;">
+            {% for action in executive_summary.priority_actions %}
+            <li>{{ action }}</li>
+            {% endfor %}
+        </ul>
+        {% else %}
+        <div class="info-box success">
+            <div class="info-box-content">✅ 未发现严重配置或连通性问题</div>
+        </div>
+        {% endif %}
+    </div>
+</section>
+
+<!-- 五、证据附录（技术深挖，默认折叠） -->
 {% if evidence_sections %}
-<div class="section" id="evidences">
+<section class="section" id="evidences">
     <div class="section-header collapsible collapsed">
         <h2>📎 证据附录</h2>
-        <span class="badge-count">{{ evidence_sections | length }} 项证据</span>
+        <span class="badge-count">{{ evidence_sections | length }} 项</span>
     </div>
     <div class="section-content collapse-content hidden">
         <div class="info-box info mb-20">
-            <div class="info-box-title">💡 说明</div>
+            <div class="info-box-title">说明</div>
             <div class="info-box-content">
-                本章节展示诊断过程中收集的原始数据，包括探测结果、系统配置快照、命令输出等。这些数据用于支持根因分析结论，供技术人员深入排查使用。
+                原始探测数据、配置快照与命令输出，供技术人员核对；正文已展示关键结论与指标。
             </div>
         </div>
 
@@ -791,62 +685,32 @@
             </summary>
             <div class="collapse-content" style="padding: 15px;">
                 <p style="color: var(--text-secondary); margin-bottom: 15px;">{{ evidence.description }}</p>
-                
-                <!-- 探测结果详情 -->
+
                 {% if evidence.probe_results %}
                 <div style="margin-bottom: 15px;">
-                    <strong style="display: block; margin-bottom: 10px;">🔍 探测结果 ({{ evidence.probe_results|length }} 项)</strong>
+                    <strong style="display: block; margin-bottom: 10px;">探测结果 ({{ evidence.probe_results|length }} 项)</strong>
                     <table>
                         <thead>
                             <tr>
-                                <th>目标</th>
-                                <th>协议</th>
-                                <th>状态</th>
-                                <th>RTT (ms)</th>
-                                <th>丢包率</th>
-                                <th>详细信息</th>
+                                <th>目标</th><th>协议</th><th>状态</th><th>RTT (ms)</th><th>丢包率</th><th>详细信息</th>
                             </tr>
                         </thead>
                         <tbody>
                             {% for probe in evidence.probe_results %}
                             <tr>
                                 <td class="font-mono">{{ probe.target.host if probe.target else 'N/A' }}</td>
-                                <td>
-                                    <span class="tag tag-unknown">
-                                        {{ probe.target.protocol.value if probe.target and probe.target.protocol else 'N/A' }}
-                                    </span>
-                                </td>
+                                <td><span class="tag tag-unknown">{{ probe.target.protocol.value if probe.target and probe.target.protocol else 'N/A' }}</span></td>
                                 <td>
                                     <span class="status-indicator {% if probe.success %}status-ok{% else %}status-error{% endif %}">
-                                        {{ '✅ 成功' if probe.success else '❌ 失败' }}
+                                        {{ '成功' if probe.success else '失败' }}
                                     </span>
                                 </td>
-                                <td>
-                                    {% if probe.metrics %}
-                                        {% if probe.metrics.rtt_avg is not none %}
-                                            {{ "%.1f"|format(probe.metrics.rtt_avg) }}
-                                        {% else %}
-                                            N/A
-                                        {% endif %}
-                                    {% else %}
-                                        N/A
-                                    {% endif %}
-                                </td>
-                                <td>
-                                    {% if probe.metrics and probe.metrics.loss_rate is not none %}
-                                        {{ "%.1f"|format(probe.metrics.loss_rate * 100) }}%
-                                    {% else %}
-                                        N/A
-                                    {% endif %}
-                                </td>
+                                <td>{% if probe.metrics and probe.metrics.rtt_avg is not none %}{{ "%.1f"|format(probe.metrics.rtt_avg) }}{% else %}N/A{% endif %}</td>
+                                <td>{% if probe.metrics and probe.metrics.loss_rate is not none %}{{ "%.1f"|format(probe.metrics.loss_rate * 100) }}%{% else %}N/A{% endif %}</td>
                                 <td style="font-size: 0.85em; color: var(--text-secondary); max-width: 300px;">
-                                    {% if probe.metrics and probe.metrics.resolved_ips %}
-                                        DNS解析: {{ probe.metrics.resolved_ips|join(', ') }}
-                                    {% elif probe.error_message %}
-                                        错误: {{ probe.error_message }}
-                                    {% else %}
-                                        -
-                                    {% endif %}
+                                    {% if probe.metrics and probe.metrics.resolved_ips %}DNS: {{ probe.metrics.resolved_ips|join(', ') }}
+                                    {% elif probe.error_message %}错误: {{ probe.error_message }}
+                                    {% else %}—{% endif %}
                                 </td>
                             </tr>
                             {% endfor %}
@@ -857,7 +721,7 @@
 
                 {% for table in evidence.snapshot_tables %}
                 <div style="margin-bottom: 15px;">
-                    <strong style="display: block; margin-bottom: 10px;">📋 {{ table.title }}</strong>
+                    <strong style="display: block; margin-bottom: 10px;">{{ table.title }}</strong>
                     <table><tbody>
                     {% for row in table.rows %}
                     <tr>{% for k, v in row.items() %}<td style="{% if loop.first %}font-weight:600;width:30%;{% endif %}padding:8px;border-bottom:1px solid var(--border-color);">{{ v }}</td>{% endfor %}</tr>
@@ -866,52 +730,33 @@
                 </div>
                 {% endfor %}
 
-                <!-- 配置快照 -->
                 {% if evidence.config_snapshots %}
                 <div style="margin-bottom: 15px;">
-                    <strong style="display: block; margin-bottom: 10px;">⚙️ 配置快照</strong>
+                    <strong style="display: block; margin-bottom: 10px;">配置快照</strong>
                     {% for key, value in evidence.config_snapshots.items() %}
                     <details style="margin-bottom: 10px; margin-left: 15px;">
-                        <summary style="cursor: pointer; font-weight: 500; color: var(--color-primary);">
-                            {{ key }}
-                        </summary>
+                        <summary style="cursor: pointer; font-weight: 500; color: var(--color-primary);">{{ key }}</summary>
                         <div style="margin-top: 10px;">
                             {% if value is mapping %}
-                                <!-- 字典类型：转换为表格或键值对列表 -->
-                                <table style="font-size: 0.9em;">
-                                    <tbody>
-                                        {% for k, v in value.items() %}
-                                        <tr>
-                                            <td style="width: 30%; font-weight: 500; padding: 8px; border-bottom: 1px solid var(--border-color);">{{ k }}</td>
-                                            <td style="padding: 8px; border-bottom: 1px solid var(--border-color);">
-                                                {% if v is string or v is number %}
-                                                    {{ v }}
-                                                {% elif v is sequence and v is not string %}
-                                                    <ul style="margin: 0; padding-left: 20px;">
-                                                        {% for item in v %}
-                                                        <li>{{ item }}</li>
-                                                        {% endfor %}
-                                                    </ul>
-                                                {% else %}
-                                                    {{ v }}
-                                                {% endif %}
-                                            </td>
-                                        </tr>
-                                        {% endfor %}
-                                    </tbody>
-                                </table>
-                            {% elif value is sequence and value is not string %}
-                                <!-- 列表类型：转换为项目列表 -->
-                                <ul style="margin: 0; padding-left: 20px;">
-                                    {% for item in value %}
-                                    <li style="margin-bottom: 5px;">{{ item }}</li>
+                            <table style="font-size: 0.9em;">
+                                <tbody>
+                                    {% for k, v in value.items() %}
+                                    <tr>
+                                        <td style="width:30%;font-weight:500;padding:8px;border-bottom:1px solid var(--border-color);">{{ k }}</td>
+                                        <td style="padding:8px;border-bottom:1px solid var(--border-color);">
+                                            {% if v is string or v is number %}{{ v }}
+                                            {% elif v is sequence and v is not string %}
+                                            <ul style="margin:0;padding-left:20px;">{% for item in v %}<li>{{ item }}</li>{% endfor %}</ul>
+                                            {% else %}{{ v }}{% endif %}
+                                        </td>
+                                    </tr>
                                     {% endfor %}
-                                </ul>
+                                </tbody>
+                            </table>
+                            {% elif value is sequence and value is not string %}
+                            <ul style="margin:0;padding-left:20px;">{% for item in value %}<li>{{ item }}</li>{% endfor %}</ul>
                             {% else %}
-                                <!-- 简单类型：直接显示 -->
-                                <div style="padding: 10px; background: var(--bg-secondary); border-radius: 6px; font-family: monospace; font-size: 0.9em;">
-                                    {{ value }}
-                                </div>
+                            <div style="padding:10px;background:var(--bg-light);border-radius:6px;font-family:monospace;font-size:0.9em;">{{ value }}</div>
                             {% endif %}
                         </div>
                     </details>
@@ -919,10 +764,9 @@
                 </div>
                 {% endif %}
 
-                <!-- 原始命令输出 -->
                 {% if evidence.raw_output %}
                 <div>
-                    <strong style="display: block; margin-bottom: 10px;">📋 原始命令输出</strong>
+                    <strong style="display: block; margin-bottom: 10px;">原始命令输出</strong>
                     <div class="code-block">
                         <button class="copy-btn" onclick="copyToClipboard(this)">复制</button>
                         <pre><code>{{ evidence.raw_output }}</code></pre>
@@ -933,14 +777,12 @@
         </details>
         {% endfor %}
     </div>
-</div>
+</section>
 {% endif %}
 
 {% include "partials/report_product_header.html" %}
 
-<!-- 页脚 -->
-<div style="text-align: center; color: var(--text-muted); font-size: 0.85em; margin-top: 40px; padding: 25px; border-top: 1px solid var(--border-color);">
-    <p>SD-WAN 桌面诊断专家 v1.0.0 | 报告生成于 {{ generated_at }}</p>
-    <p style="margin-top: 8px; font-size: 0.9em;">© 2026 SD-WAN Diagnostic Platform</p>
+<div class="qc-footer-note">
+    SD-WAN 桌面诊断专家 · {{ generated_at }} · 规则 {{ rule_version }}
 </div>
 {% endblock %}
